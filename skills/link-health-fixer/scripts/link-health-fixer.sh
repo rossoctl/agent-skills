@@ -321,21 +321,28 @@ while IFS= read -r item; do
     if [ "$candidate_count" -eq 1 ] && [ -n "$candidates" ]; then
       new_path="$candidates"
     elif [ "$candidate_count" -gt 1 ]; then
-      echo "    Multiple candidates found ($candidate_count), flagging for model"
-      candidate_list=$(echo "$candidates" | jq -R . | jq -s .)
-      jq --argjson new "$(jq -nc \
-        --arg number "$number" \
-        --arg repo "$repo" \
-        --arg issue_repo "$issue_repo" \
-        --arg file "$source_file" \
-        --arg url "$broken_url" \
-        --arg target_repo "$target_repo_name" \
-        --arg target_path "$target_path" \
-        --argjson candidates "$candidate_list" \
-        '{issue_number: ($number|tonumber), repo: $repo, file: $file, broken_url: $url, target_repo: $target_repo, target_path: $target_path, candidates: $candidates, reason: "multiple_matches"}')" \
-        '. += [$new]' "$AMBIGUOUS_FILE" > "$TMPDIR/amb_tmp.json" && mv "$TMPDIR/amb_tmp.json" "$AMBIGUOUS_FILE"
-      AMBIGUOUS_COUNT=$((AMBIGUOUS_COUNT + 1))
-      continue
+      # Score candidates by path-suffix match
+      best=$(pick_best_candidate "$target_path" "$candidates" 1) || true
+      if [ -n "$best" ]; then
+        echo "    Scored best candidate: $best"
+        new_path="$best"
+      else
+        echo "    Multiple candidates found ($candidate_count), flagging for model"
+        candidate_list=$(echo "$candidates" | jq -R . | jq -s .)
+        jq --argjson new "$(jq -nc \
+          --arg number "$number" \
+          --arg repo "$repo" \
+          --arg issue_repo "$issue_repo" \
+          --arg file "$source_file" \
+          --arg url "$broken_url" \
+          --arg target_repo "$target_repo_name" \
+          --arg target_path "$target_path" \
+          --argjson candidates "$candidate_list" \
+          '{issue_number: ($number|tonumber), repo: $repo, file: $file, broken_url: $url, target_repo: $target_repo, target_path: $target_path, candidates: $candidates, reason: "multiple_matches"}')" \
+          '. += [$new]' "$AMBIGUOUS_FILE" > "$TMPDIR/amb_tmp.json" && mv "$TMPDIR/amb_tmp.json" "$AMBIGUOUS_FILE"
+        AMBIGUOUS_COUNT=$((AMBIGUOUS_COUNT + 1))
+        continue
+      fi
     fi
   fi
 
@@ -351,21 +358,28 @@ while IFS= read -r item; do
     if [ "$candidate_count" -eq 1 ] && [ -n "$candidates" ]; then
       new_path="$candidates"
     elif [ "$candidate_count" -gt 1 ]; then
-      echo "    Multiple extension variants found ($candidate_count), flagging for model"
-      candidate_list=$(echo "$candidates" | jq -R . | jq -s .)
-      jq --argjson new "$(jq -nc \
-        --arg number "$number" \
-        --arg repo "$repo" \
-        --arg issue_repo "$issue_repo" \
-        --arg file "$source_file" \
-        --arg url "$broken_url" \
-        --arg target_repo "$target_repo_name" \
-        --arg target_path "$target_path" \
-        --argjson candidates "$candidate_list" \
-        '{issue_number: ($number|tonumber), repo: $repo, file: $file, broken_url: $url, target_repo: $target_repo, target_path: $target_path, candidates: $candidates, reason: "multiple_extension_matches"}')" \
-        '. += [$new]' "$AMBIGUOUS_FILE" > "$TMPDIR/amb_tmp.json" && mv "$TMPDIR/amb_tmp.json" "$AMBIGUOUS_FILE"
-      AMBIGUOUS_COUNT=$((AMBIGUOUS_COUNT + 1))
-      continue
+      # Score candidates by path-suffix match
+      best=$(pick_best_candidate "$target_path" "$candidates" 1) || true
+      if [ -n "$best" ]; then
+        echo "    Scored best candidate: $best"
+        new_path="$best"
+      else
+        echo "    Multiple extension variants found ($candidate_count), flagging for model"
+        candidate_list=$(echo "$candidates" | jq -R . | jq -s .)
+        jq --argjson new "$(jq -nc \
+          --arg number "$number" \
+          --arg repo "$repo" \
+          --arg issue_repo "$issue_repo" \
+          --arg file "$source_file" \
+          --arg url "$broken_url" \
+          --arg target_repo "$target_repo_name" \
+          --arg target_path "$target_path" \
+          --argjson candidates "$candidate_list" \
+          '{issue_number: ($number|tonumber), repo: $repo, file: $file, broken_url: $url, target_repo: $target_repo, target_path: $target_path, candidates: $candidates, reason: "multiple_extension_matches"}')" \
+          '. += [$new]' "$AMBIGUOUS_FILE" > "$TMPDIR/amb_tmp.json" && mv "$TMPDIR/amb_tmp.json" "$AMBIGUOUS_FILE"
+        AMBIGUOUS_COUNT=$((AMBIGUOUS_COUNT + 1))
+        continue
+      fi
     fi
   fi
 
