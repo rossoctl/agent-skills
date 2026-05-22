@@ -208,10 +208,11 @@ while IFS= read -r item; do
   number=$(echo "$item" | jq -r '.number')
   repo=$(echo "$item" | jq -r '.repo')
   broken_url=$(echo "$item" | jq -r '.url')
+  source_file=$(echo "$item" | jq -r '.file')
 
   # Skip issues that already have an open fix PR (don't count toward limit)
-  if issue_has_open_pr "$repo" "$number" "$FORK_OWNER"; then
-    echo "  #$number: Open PR already exists, skipping"
+  if covering_pr=$(issue_has_open_pr "$repo" "$number" "$source_file" "$broken_url"); then
+    echo "  #$number: Open PR #$covering_pr already covers, skipping"
     continue
   fi
 
@@ -270,8 +271,8 @@ while IFS= read -r item; do
   broken_url=$(echo "$item" | jq -r '.url')
 
   # Skip issues that already have an open fix PR
-  if issue_has_open_pr "$repo" "$number" "$FORK_OWNER"; then
-    echo "  #$number: Open PR already exists, skipping"
+  if covering_pr=$(issue_has_open_pr "$repo" "$number" "$source_file" "$broken_url"); then
+    echo "  #$number: Open PR #$covering_pr already covers, skipping"
     continue
   fi
 
@@ -566,8 +567,8 @@ while IFS= read -r item; do
   source_file=$(echo "$item" | jq -r '.file')
 
   # Skip issues that already have an open fix PR
-  if issue_has_open_pr "$repo" "$number" "$FORK_OWNER"; then
-    echo "  #$number: Open PR already exists, skipping"
+  if covering_pr=$(issue_has_open_pr "$repo" "$number" "$source_file" "$broken_url"); then
+    echo "  #$number: Open PR #$covering_pr already covers, skipping"
     continue
   fi
 

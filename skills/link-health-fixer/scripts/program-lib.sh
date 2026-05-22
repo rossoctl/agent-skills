@@ -224,37 +224,88 @@ close_issue_if_valid() {
   return 1
 }
 
-# Check if an issue already has an open fix PR from a given author.
-# Used by the fixer to skip issues that are already being addressed,
-# and to avoid counting them toward --issue-limit.
+# Returns 0 if any open PR in $repo plausibly covers $issue_number.
+# Prints the covering PR number on stdout when found (for logging).
 #
-# Usage:
-#   if issue_has_open_pr "kagenti/adk" "42" "clawgenti"; then
-#     echo "PR already exists, skipping"
-#     continue
-#   fi
+# Uses a three-layer detection strategy:
+#   Layer 1: GraphQL closingIssuesReferences (keyword-agnostic, author-agnostic)
+#   Layer 2: Keyword text search across all authors (close/fix/resolve variants)
+#   Layer 3: File + URL overlap in PR diffs (catches unlisted but covered issues)
 #
 # Args:
-#   $1 - full repo name
+#   $1 - full repo name (e.g., "kagenti/adk")
 #   $2 - issue number
-#   $3 - fork owner / PR author (e.g., "clawgenti")
-# Returns: 0 if a matching PR exists, 1 otherwise
+#   $3 - (optional) source file path from the issue body
+#   $4 - (optional) broken URL from the issue body
+# Returns: 0 if covered, 1 otherwise
 issue_has_open_pr() {
   local repo="$1"
   local issue_number="$2"
-  local fork_owner="$3"
-  local pr_count
+  local source_file="${3:-}"
+  local broken_url="${4:-}"
+  local owner="${repo%/*}"
+  local repo_name="${repo#*/}"
+  local pr_number
 
-  pr_count=$(gh pr list \
-    --repo "$repo" \
-    --author "$fork_owner" \
-    --state open \
-    --search "Closes #$issue_number" \
-    --json number \
-    --jq 'length' \
-    2>/dev/null || echo "0")
+  # Layer 1: GraphQL closingIssuesReferences (cheapest, most authoritative)
+  # This catches any PR that GitHub recognizes as closing the issue,
+  # regardless of author or keyword variant.
+  pr_number=$(gh api graphql -f query='
+    query($owner:String!, $repo:String!, $num:Int!) {
+      repository(owner:$owner, name:$repo) {
+        issue(number:$num) {
+          closedByPullRequestsReferences(first:5, includeClosedPrs:false) {
+            nodes { number state }
+          }
+        }
+      }
+    }' \
+    -F owner="$owner" -F repo="$repo_name" -F num="$issue_number" \
+    --jq '.data.repository.issue.closedByPullRequestsReferences.nodes[] | select(.state == "OPEN") | .number' \
+    2>/dev/null | head -1)
 
-  [ "$pr_count" -gt 0 ]
+  if [ -n "$pr_number" ]; then
+    echo "$pr_number"
+    return 0
+  fi
+
+  # Layer 2: Keyword search fallback (broader text match, all authors)
+  pr_number=$(gh pr list --repo "$repo" --state open \
+    --search "#$issue_number" \
+    --json number,body \
+    --jq ".[] | select(.body | test(\"(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?)\\\\s+#$issue_number\")) | .number" \
+    2>/dev/null | head -1)
+
+  if [ -n "$pr_number" ]; then
+    echo "$pr_number"
+    return 0
+  fi
+
+  # Layer 3: File + URL overlap (only when source_file and broken_url provided)
+  if [ -n "$source_file" ] && [ -n "$broken_url" ]; then
+    local pr_numbers
+    pr_numbers=$(gh pr list --repo "$repo" --state open \
+      --json number,files \
+      --jq ".[] | select(.files[]?.path == \"$source_file\") | .number" \
+      2>/dev/null)
+
+    local candidate_pr
+    local escaped_url
+    # Escape regex metacharacters in the URL for grep (BSD-compatible)
+    escaped_url=$(printf '%s' "$broken_url" | sed -E 's/[.[\*^$()+?{|]/\\&/g')
+
+    while IFS= read -r candidate_pr; do
+      [ -z "$candidate_pr" ] && continue
+      # Check if the PR's diff removes a line containing the broken URL
+      if gh pr diff "$candidate_pr" --repo "$repo" 2>/dev/null \
+        | grep -q "^-.*$escaped_url"; then
+        echo "$candidate_pr"
+        return 0
+      fi
+    done <<< "$pr_numbers"
+  fi
+
+  return 1
 }
 
 # =============================================================================
