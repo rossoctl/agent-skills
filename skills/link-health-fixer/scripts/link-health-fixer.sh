@@ -149,7 +149,7 @@ while IFS= read -r issue_json; do
   issue_repo=$(echo "$body" | sed -nE 's/^\*\*Repo:\*\*[[:space:]]*(.*)/\1/p' | head -1 | tr -d ' ' || true)
   issue_file=$(echo "$body" | sed -nE 's/^\*\*File:\*\*[[:space:]]*(.*)/\1/p' | head -1 | tr -d ' ' || true)
   broken_url=$(echo "$body" | sed -nE 's/^\*\*Broken URL:\*\*[[:space:]]*(.*)/\1/p' | head -1 | tr -d ' ' || true)
-  http_status=$(echo "$body" | sed -nE 's/^\*\*HTTP Status:\*\*[[:space:]]*(.*)/\1/p' | head -1 | tr -d ' ' || true)
+  http_status=$(echo "$body" | sed -nE 's/^\*\*HTTP Status:\*\*[[:space:]]*(.*)/\1/p' | head -1 || true)
   category=$(echo "$body" | sed -nE 's/^Category:[[:space:]]*(.*)/\1/p' | head -1 | tr -d ' ' || true)
 
   # Skip issues with missing required fields

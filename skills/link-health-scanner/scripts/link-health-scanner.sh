@@ -137,16 +137,34 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   REPOS_SCANNED=$((REPOS_SCANNED + 1))
 
   # Extract broken links from error_map (skip non-URL entries like "Error building URL")
+  # Normalize lychee status to enum tokens: numeric codes stay as-is,
+  # text statuses map to: timeout, dns, unreachable, error, unknown.
+  # Suppress URLs with unreachable-by-design hostnames (cluster-local, .local, RFC1918).
   jq -r --arg repo "$repo_name" --arg org "$ORG" --arg repos_dir "$REPOS_DIR/$repo_name/" '
     .error_map // {} | to_entries[] |
     .key as $filepath |
     .value[] |
     select(.url | test("^https?://")) |
+    # Suppress unreachable-by-design hostnames at URL level
+    select(.url | test("://[^/]*\\.svc\\.cluster\\.local([:/]|$)") | not) |
+    select(.url | test("://[^/]*\\.local([:/]|$)") | not) |
+    select(.url | test("://(10\\.[0-9]|172\\.(1[6-9]|2[0-9]|3[01])\\.[0-9]|192\\.168\\.[0-9])[0-9.]*([:/]|$)") | not) |
+    (.status.code // .status.text // null) as $raw_status |
+    (
+      if $raw_status == null then "unknown"
+      elif ($raw_status | type) == "number" then ($raw_status | tostring)
+      elif ($raw_status | test("^[0-9]{3}$")) then $raw_status
+      elif ($raw_status | ascii_downcase | test("timeout")) then "timeout"
+      elif ($raw_status | ascii_downcase | test("resolve|dns")) then "dns"
+      elif ($raw_status | ascii_downcase | test("refused|reset|closed|unreachable|connect")) then "unreachable"
+      else "error"
+      end
+    ) as $status |
     {
       repo: ($org + "/" + $repo),
       file: ($filepath | ltrimstr($repos_dir) | ltrimstr("./")),
       url: .url,
-      status: (.status.code // .status.text // "unknown"),
+      status: $status,
       category: (
         if (.url | test("github\\.com/" + $org)) then "internal"
         else "external"
