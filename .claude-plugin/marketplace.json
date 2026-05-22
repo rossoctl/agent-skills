@@ -1,0 +1,23 @@
+{
+  "name": "kagenti-agent-skills",
+  "owner": {
+    "name": "kagenti",
+    "email": "admin@kagenti.org"
+  },
+  "metadata": {
+    "description": "Automation skills for GitHub org maintenance",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "link-health",
+      "description": "Scan and fix broken links across all repos in a GitHub org",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/link-health-scanner",
+        "./skills/link-health-fixer"
+      ]
+    }
+  ]
+}
