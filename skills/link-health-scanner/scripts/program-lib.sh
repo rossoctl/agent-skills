@@ -303,8 +303,8 @@ validate_issue_fields() {
     return 1
   fi
 
-  # Status must be numeric or a known text value
-  if ! echo "$status" | grep -qE '^([0-9]{3}|unknown|timeout|error)$'; then
+  # Status must be numeric or a known enum token
+  if ! echo "$status" | grep -qE '^([0-9]{3}|unknown|timeout|dns|unreachable|error)$'; then
     echo "  WARN: Invalid status field: '$status'" >&2
     return 1
   fi
