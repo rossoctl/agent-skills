@@ -319,6 +319,98 @@ validate_issue_fields() {
 }
 
 # =============================================================================
+# PATH-SUFFIX SCORING
+# =============================================================================
+
+# Score a candidate path against a broken path by counting shared leading
+# path segments (case-insensitive prefix match). This prioritizes candidates
+# that share the most directory context with the broken URL, which best
+# identifies where a renamed/moved file ended up.
+#
+# Example:
+#   score_path_suffix "authbridge/cmd/authbridge/README.md" "authbridge/cmd/README.md"
+#   # prints: 2 (shared prefix: authbridge/cmd)
+#
+# Args:
+#   $1 - broken path (the original path from the URL)
+#   $2 - candidate path (a found file)
+# Prints: integer score (number of shared leading segments, 0 if none match)
+score_path_suffix() {
+  local broken_path="$1"
+  local candidate_path="$2"
+
+  # Lowercase both for case-insensitive comparison
+  local broken_lower candidate_lower
+  broken_lower=$(printf '%s' "$broken_path" | tr '[:upper:]' '[:lower:]')
+  candidate_lower=$(printf '%s' "$candidate_path" | tr '[:upper:]' '[:lower:]')
+
+  # Split paths into arrays by "/"
+  IFS='/' read -ra broken_parts <<< "$broken_lower"
+  IFS='/' read -ra candidate_parts <<< "$candidate_lower"
+
+  local broken_len=${#broken_parts[@]}
+  local candidate_len=${#candidate_parts[@]}
+  local max_compare=$((broken_len < candidate_len ? broken_len : candidate_len))
+  local score=0
+
+  # Count shared leading segments
+  local i
+  for ((i = 0; i < max_compare; i++)); do
+    if [ "${broken_parts[$i]}" = "${candidate_parts[$i]}" ]; then
+      score=$((score + 1))
+    else
+      break
+    fi
+  done
+
+  echo "$score"
+}
+
+# Given a broken path and a newline-separated list of candidates, find the
+# best match by path-suffix score. Prints the winning candidate if there's
+# a unique top scorer with score >= min_score; prints nothing otherwise.
+#
+# Usage:
+#   winner=$(pick_best_candidate "$target_path" "$candidates" 1)
+#
+# Args:
+#   $1 - broken path (from URL)
+#   $2 - newline-separated candidate paths
+#   $3 - minimum score threshold (default: 1)
+# Prints: best candidate path if unique winner, empty if tied or below threshold
+# Returns: 0 if unique winner found, 1 otherwise
+pick_best_candidate() {
+  local broken_path="$1"
+  local candidates="$2"
+  local min_score="${3:-1}"
+
+  local best_score=0
+  local best_candidate=""
+  local tied=false
+
+  while IFS= read -r candidate; do
+    [ -z "$candidate" ] && continue
+    local score
+    score=$(score_path_suffix "$broken_path" "$candidate")
+
+    if [ "$score" -gt "$best_score" ]; then
+      best_score=$score
+      best_candidate="$candidate"
+      tied=false
+    elif [ "$score" -eq "$best_score" ] && [ "$score" -gt 0 ]; then
+      tied=true
+    fi
+  done <<< "$candidates"
+
+  if [ "$best_score" -ge "$min_score" ] && [ "$tied" = false ] && [ -n "$best_candidate" ]; then
+    echo "$best_candidate"
+    return 0
+  fi
+
+  return 1
+}
+
+# =============================================================================
 # REPORTS
 # =============================================================================
 
