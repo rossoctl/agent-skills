@@ -145,12 +145,12 @@ while IFS= read -r issue_json; do
   repo_full=$(echo "$issue_json" | jq -r '.repository.nameWithOwner // empty')
   body=$(echo "$issue_json" | jq -r '.body // ""')
 
-  # Parse structured fields from issue body
-  issue_repo=$(echo "$body" | grep -oP '\*\*Repo:\*\*\s*\K.*' | head -1 | tr -d ' ' || true)
-  issue_file=$(echo "$body" | grep -oP '\*\*File:\*\*\s*\K.*' | head -1 | tr -d ' ' || true)
-  broken_url=$(echo "$body" | grep -oP '\*\*Broken URL:\*\*\s*\K.*' | head -1 | tr -d ' ' || true)
-  http_status=$(echo "$body" | grep -oP '\*\*HTTP Status:\*\*\s*\K.*' | head -1 | tr -d ' ' || true)
-  category=$(echo "$body" | grep -oP 'Category:\s*\K.*' | head -1 | tr -d ' ' || true)
+  # Parse structured fields from issue body (BSD-compatible, no grep -P)
+  issue_repo=$(echo "$body" | sed -nE 's/^\*\*Repo:\*\*[[:space:]]*(.*)/\1/p' | head -1 | tr -d ' ' || true)
+  issue_file=$(echo "$body" | sed -nE 's/^\*\*File:\*\*[[:space:]]*(.*)/\1/p' | head -1 | tr -d ' ' || true)
+  broken_url=$(echo "$body" | sed -nE 's/^\*\*Broken URL:\*\*[[:space:]]*(.*)/\1/p' | head -1 | tr -d ' ' || true)
+  http_status=$(echo "$body" | sed -nE 's/^\*\*HTTP Status:\*\*[[:space:]]*(.*)/\1/p' | head -1 | tr -d ' ' || true)
+  category=$(echo "$body" | sed -nE 's/^Category:[[:space:]]*(.*)/\1/p' | head -1 | tr -d ' ' || true)
 
   # Skip issues with missing required fields
   [ -z "$issue_repo" ] && continue
@@ -215,11 +215,11 @@ while IFS= read -r item; do
     continue
   fi
 
-  # Extract target org/repo/path from GitHub URL
-  if echo "$broken_url" | grep -qP 'github\.com/[^/]+/[^/]+/(blob|tree)/'; then
-    target_org=$(echo "$broken_url" | grep -oP 'github\.com/\K[^/]+')
-    target_repo=$(echo "$broken_url" | grep -oP 'github\.com/[^/]+/\K[^/]+')
-    target_ref=$(echo "$broken_url" | grep -oP '(blob|tree)/\K[^/]+')
+  # Extract target org/repo/path from GitHub URL (BSD-compatible)
+  if echo "$broken_url" | grep -qE 'github\.com/[^/]+/[^/]+/(blob|tree)/'; then
+    target_org=$(echo "$broken_url" | sed -nE 's#.*github\.com/([^/]+)/.*#\1#p')
+    target_repo=$(echo "$broken_url" | sed -nE 's#.*github\.com/[^/]+/([^/]+)/.*#\1#p')
+    target_ref=$(echo "$broken_url" | sed -nE 's#.*(blob|tree)/([^/]+)/.*#\2#p')
     target_path=$(echo "$broken_url" | sed -E 's#.*/((blob|tree))/[^/]+/##')
 
     # Check if file exists via GitHub API
@@ -279,8 +279,8 @@ while IFS= read -r item; do
   target_repo_name=""
   target_path=""
 
-  if echo "$broken_url" | grep -qP 'github\.com/[^/]+/[^/]+/(blob|tree)/'; then
-    target_repo_name=$(echo "$broken_url" | grep -oP 'github\.com/[^/]+/\K[^/]+')
+  if echo "$broken_url" | grep -qE 'github\.com/[^/]+/[^/]+/(blob|tree)/'; then
+    target_repo_name=$(echo "$broken_url" | sed -nE 's#.*github\.com/[^/]+/([^/]+)/.*#\1#p')
     target_path=$(echo "$broken_url" | sed -E 's#.*/((blob|tree))/[^/]+/##')
   else
     echo "  #$number: Unrecognized URL format, skipping"
@@ -380,10 +380,10 @@ while IFS= read -r item; do
     continue
   fi
 
-  # Build new URL
-  target_ref=$(echo "$broken_url" | grep -oP '(blob|tree)/\K[^/]+')
-  url_type=$(echo "$broken_url" | grep -oP '(blob|tree)' | head -1)
-  target_org=$(echo "$broken_url" | grep -oP 'github\.com/\K[^/]+')
+  # Build new URL (BSD-compatible)
+  target_ref=$(echo "$broken_url" | sed -nE 's#.*(blob|tree)/([^/]+)/.*#\2#p')
+  url_type=$(echo "$broken_url" | sed -nE 's#.*(blob|tree)/.*#\1#p')
+  target_org=$(echo "$broken_url" | sed -nE 's#.*github\.com/([^/]+)/.*#\1#p')
   new_url="https://github.com/$target_org/$target_repo_name/$url_type/$target_ref/$new_path"
 
   # Verify the new path exists
