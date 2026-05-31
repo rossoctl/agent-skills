@@ -18,6 +18,15 @@
         "./skills/link-health-scanner",
         "./skills/link-health-fixer"
       ]
+    },
+    {
+      "name": "dep-bump",
+      "description": "Monitor Dependabot PRs for SLA breaches across a GitHub org",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/dep-bump-scanner"
+      ]
     }
   ]
 }
