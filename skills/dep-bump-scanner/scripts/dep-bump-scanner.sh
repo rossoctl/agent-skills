@@ -479,7 +479,6 @@ Detected by: OpenClaw Dep Bump Scanner (scan $SCAN_ID)"
     ISSUES_CREATED=$((ISSUES_CREATED + 1))
   elif gh issue create --repo "$full_repo" \
     --title "$issue_title" \
-    --label "kind/bug,dep-bump/stale" \
     --body "$issue_body" 2>/dev/null; then
     ISSUES_CREATED=$((ISSUES_CREATED + 1))
     echo "  Created issue for $package in $issue_repo"
