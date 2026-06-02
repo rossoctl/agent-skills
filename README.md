@@ -10,6 +10,9 @@ Built to the [Agent Skills specification](https://agentskills.io/specification).
 |-------|-------------|
 | [link-health-scanner](skills/link-health-scanner/) | Scan repos for broken links, create GitHub issues for findings |
 | [link-health-fixer](skills/link-health-fixer/) | Re-verify and fix broken links, open PRs for fixes |
+| [dep-bump-scanner](skills/dep-bump-scanner/) | Monitor Dependabot PRs, classify by severity, flag SLA breaches |
+| [dep-bump-fixer](skills/dep-bump-fixer/) | Analyze stale Dependabot PRs and post commentary to accelerate review |
+| [automation-health-dashboard](skills/automation-health-dashboard/) | Generate executive-facing dashboard combining all program metrics |
 
 ## Installation
 

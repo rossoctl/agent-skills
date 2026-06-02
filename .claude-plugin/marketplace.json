@@ -21,11 +21,21 @@
     },
     {
       "name": "dep-bump",
-      "description": "Monitor Dependabot PRs for SLA breaches across a GitHub org",
+      "description": "Monitor and analyze Dependabot PRs for SLA breaches across a GitHub org",
       "source": "./",
       "strict": false,
       "skills": [
-        "./skills/dep-bump-scanner"
+        "./skills/dep-bump-scanner",
+        "./skills/dep-bump-fixer"
+      ]
+    },
+    {
+      "name": "automation-health",
+      "description": "Generate executive-facing automation health dashboard combining all program metrics",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/automation-health-dashboard"
       ]
     }
   ]
