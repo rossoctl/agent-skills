@@ -17,6 +17,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/program-lib.sh"
 
+# --- Rate-limit backoff ---
+RATE_LIMIT_BACKOFF=0
+gh_with_backoff() {
+  local attempt=0
+  local max_attempts=3
+  local wait=5
+  while [ $attempt -lt $max_attempts ]; do
+    if output=$(gh "$@" 2>&1); then
+      RATE_LIMIT_BACKOFF=0
+      printf '%s' "$output"
+      return 0
+    fi
+    if echo "$output" | grep -qiE 'rate limit|403|429|secondary rate'; then
+      attempt=$((attempt + 1))
+      RATE_LIMIT_BACKOFF=$((RATE_LIMIT_BACKOFF + 1))
+      if [ $attempt -lt $max_attempts ]; then
+        echo "  WARN: Rate limited, backing off ${wait}s (attempt $attempt/$max_attempts)" >&2
+        sleep $wait
+        wait=$((wait * 2))
+      fi
+    else
+      printf '%s' "$output" >&2
+      return 1
+    fi
+  done
+  echo "  ERROR: Rate limit persisted after $max_attempts attempts, stopping" >&2
+  return 1
+}
+
 # --- CLI args ---
 DRY_RUN=true  # Safe by default
 ISSUE_LIMIT=15
@@ -229,7 +258,7 @@ while IFS= read -r issue_record; do
   echo "  Processing #$issue_number: $package in $issue_repo (PR #$pr_number, $severity)"
 
   # --- Step 5: Check PR state ---
-  pr_state=$(gh pr view "$pr_number" --repo "$issue_repo" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
+  pr_state=$(gh_with_backoff pr view "$pr_number" --repo "$issue_repo" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
 
   if [ "$pr_state" = "MERGED" ] || [ "$pr_state" = "CLOSED" ]; then
     echo "    PR #$pr_number is $pr_state — closing issue"
@@ -245,9 +274,11 @@ while IFS= read -r issue_record; do
   fi
 
   # Check if fixer already commented on this PR
-  already_commented=$(gh pr view "$pr_number" --repo "$issue_repo" \
-    --json comments --jq "[.comments[] | select(.body | contains(\"$FIXER_SIGNATURE\"))] | length" \
-    2>/dev/null || echo "0")
+  # $sig below is a jq variable passed via --arg, not a shell expansion
+  # shellcheck disable=SC2016
+  already_commented=$(gh_with_backoff pr view "$pr_number" --repo "$issue_repo" \
+    --json comments --jq --arg sig "$FIXER_SIGNATURE" \
+    '[.comments[] | select(.body | contains($sig))] | length' 2>/dev/null || echo "0")
 
   if [ "$already_commented" -gt 0 ]; then
     if [ "$VERBOSE" = true ]; then
@@ -261,7 +292,7 @@ while IFS= read -r issue_record; do
 
   # Re-check CI status from live PR
   live_ci="unknown"
-  ci_checks=$(gh pr checks "$pr_number" --repo "$issue_repo" 2>/dev/null || echo "")
+  ci_checks=$(gh_with_backoff pr checks "$pr_number" --repo "$issue_repo" 2>/dev/null || echo "")
   if [ -n "$ci_checks" ]; then
     if echo "$ci_checks" | grep -qiF "fail"; then
       live_ci="failing"
@@ -273,7 +304,7 @@ while IFS= read -r issue_record; do
   fi
 
   # Get PR body for changelog extraction
-  pr_body=$(gh pr view "$pr_number" --repo "$issue_repo" --json body --jq '.body' 2>/dev/null || echo "")
+  pr_body=$(gh_with_backoff pr view "$pr_number" --repo "$issue_repo" --json body --jq '.body' 2>/dev/null || echo "")
 
   # Extract changelog/release notes section from PR body
   changelog_summary=""
@@ -396,12 +427,12 @@ _${FIXER_SIGNATURE} (scan $SCAN_ID)_"
       echo "    --- (truncated) ---"
     fi
   else
-    if gh pr comment "$pr_number" --repo "$issue_repo" --body "$comment" 2>/dev/null; then
+    if gh_with_backoff pr comment "$pr_number" --repo "$issue_repo" --body "$comment" 2>/dev/null; then
       COMMENTS_POSTED=$((COMMENTS_POSTED + 1))
       echo "    Posted analysis on PR #$pr_number"
 
       # Also comment on the scanner issue
-      gh issue comment "$issue_number" --repo "$issue_repo" \
+      gh_with_backoff issue comment "$issue_number" --repo "$issue_repo" \
         --body "Analysis posted on PR #$pr_number. Awaiting human action.
 
 _${FIXER_SIGNATURE} (scan $SCAN_ID)_" 2>/dev/null || true

@@ -477,7 +477,7 @@ write_report_latest() {
   local filename="${3:-latest.json}"
 
   mkdir -p "$reports_dir"
-  printf '%s\n' "$content" > "$reports_dir/$filename"
+  printf '%s\n' "$content" > "$reports_dir/$filename.tmp" && mv "$reports_dir/$filename.tmp" "$reports_dir/$filename"
 }
 
 # Append a row to history.json, keeping the file under a maximum row count.
@@ -566,7 +566,7 @@ ensure_fork() {
 #     "fix/broken-links-2026-05-21" \
 #     "docs: Fix broken link in README.md" \
 #     "docs: Fix 1 broken internal link(s) in adk" \
-#     "Automated fix by OpenClaw Link Health Fixer.")
+#     "Automated fix by Kagenti Link Health Fixer.")
 #
 # Args:
 #   $1 - org name
