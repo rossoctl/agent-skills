@@ -479,11 +479,28 @@ else
   existing_pr=$(gh api "repos/$ORG/$ORG/pulls?head=$FORK_OWNER:$DASHBOARD_BRANCH&state=open" \
     --jq '.[0].number' 2>/dev/null || echo "")
 
+  pr_body="## Summary
+
+Auto-updated by Kagenti Automation Health Dashboard. This PR is continuously updated with each generation. Merge when convenient.
+
+| Metric | Value |
+|--------|-------|
+| Programs active | $PROGRAMS_ACTIVE |
+| Issues created (cumulative) | $TOTAL_ISSUES_CREATED |
+| Issues resolved (cumulative) | $TOTAL_ISSUES_RESOLVED |
+| Estimated hours saved | ${HOURS_SAVED} hrs |
+
+## Related issue(s)
+
+- kagenti/kagenti#1260"
+
   if [ -z "$existing_pr" ] || [ "$existing_pr" = "null" ]; then
     gh pr create --repo "$ORG/$ORG" \
       --head "$FORK_OWNER:$DASHBOARD_BRANCH" --base main \
       --title "docs: Automation health dashboard (auto-updated)" \
-      --body "Auto-updated by Kagenti Automation Health Dashboard. This PR is continuously updated with each generation. Merge when convenient." 2>/dev/null || echo "WARN: Failed to create dashboard PR"
+      --body "$pr_body" 2>/dev/null || echo "WARN: Failed to create dashboard PR"
+  else
+    gh pr edit "$existing_pr" --repo "$ORG/$ORG" --body "$pr_body" 2>/dev/null || true
   fi
 
   echo "Dashboard committed and pushed"
