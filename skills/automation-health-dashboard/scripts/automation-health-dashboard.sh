@@ -12,10 +12,7 @@ set -euo pipefail
 #   bash automation-health-dashboard.sh --live
 # =============================================================================
 
-# --- Load shared library ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck disable=SC1091
-source "$SCRIPT_DIR/program-lib.sh"
 
 # --- CLI args ---
 DRY_RUN=true
