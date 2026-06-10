@@ -17,35 +17,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/program-lib.sh"
 
-# --- Rate-limit backoff ---
-RATE_LIMIT_BACKOFF=0
-gh_with_backoff() {
-  local attempt=0
-  local max_attempts=3
-  local wait=5
-  while [ $attempt -lt $max_attempts ]; do
-    if output=$(gh "$@" 2>&1); then
-      RATE_LIMIT_BACKOFF=0
-      printf '%s' "$output"
-      return 0
-    fi
-    if echo "$output" | grep -qiE 'rate limit|403|429|secondary rate'; then
-      attempt=$((attempt + 1))
-      RATE_LIMIT_BACKOFF=$((RATE_LIMIT_BACKOFF + 1))
-      if [ $attempt -lt $max_attempts ]; then
-        echo "  WARN: Rate limited, backing off ${wait}s (attempt $attempt/$max_attempts)" >&2
-        sleep $wait
-        wait=$((wait * 2))
-      fi
-    else
-      printf '%s' "$output" >&2
-      return 1
-    fi
-  done
-  echo "  ERROR: Rate limit persisted after $max_attempts attempts, stopping" >&2
-  return 1
-}
-
 # --- CLI args ---
 DRY_RUN=true  # Safe by default
 ISSUE_LIMIT=15
