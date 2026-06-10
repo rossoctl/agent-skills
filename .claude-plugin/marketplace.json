@@ -28,6 +28,15 @@
         "./skills/dep-bump-scanner",
         "./skills/dep-bump-fixer"
       ]
+    },
+    {
+      "name": "automation-health",
+      "description": "Generate executive-facing automation health dashboard combining all program metrics",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/automation-health-dashboard"
+      ]
     }
   ]
 }
