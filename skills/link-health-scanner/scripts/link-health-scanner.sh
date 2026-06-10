@@ -111,7 +111,8 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
     --exclude 'example\.com' --exclude 'example\.org'
     --exclude-all-private
     --exclude-path 'node_modules' --exclude-path 'vendor' --exclude-path '\.claude'
-    --accept '200,204,206,403,429,503'
+    --accept '200,204,206,403,429,502,503'
+    --exclude 'console\.cloud\.google\.com'
     --timeout 10
     --max-retries 2
     --max-concurrency 8
