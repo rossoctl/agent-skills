@@ -208,14 +208,6 @@ def generate_report(org, since, until, enhanced=False):
     lines.append(f"| **TOTAL** | **{totals['m']}** | **{totals['o']}** | **{totals['i']}** | **{totals['n']}** | | |")
     lines.append("")
 
-    # Active Epics (populated by epic-tracker.py output)
-    lines += generate_active_epics_section(org, since, until)
-    lines.append("")
-
-    # Action Items
-    lines += generate_action_items(repos_data)
-    lines.append("")
-
     # Cross-Repo Highlights
     lines += ["## Cross-Repo Highlights", ""]
     contrib_repos = defaultdict(set)
@@ -267,6 +259,14 @@ def generate_report(org, since, until, enhanced=False):
     if repos_data and repos_data[0]['merged'] and len(repos_data[0]['merged']) > 20:
         lines.append(f"- **{repos_data[0]['name']}** saw massive activity ({len(repos_data[0]['merged'])} merged PRs)")
         lines.append("")
+
+    # Active Epics (populated by epic-tracker.py output)
+    lines += generate_active_epics_section(org, since, until)
+    lines.append("")
+
+    # Action Items
+    lines += generate_action_items(repos_data)
+    lines.append("")
 
     lines += ["---", ""]
 
