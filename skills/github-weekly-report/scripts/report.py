@@ -1,0 +1,471 @@
+#!/usr/bin/env python3
+"""GitHub Weekly Report Generator"""
+import json, os, subprocess, sys, argparse, re
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+def run_gh(args):
+    cmd = ['gh'] + args
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            print(f"Warning: gh command failed: {' '.join(cmd)}\n  {result.stderr.strip()}", file=sys.stderr)
+            return []
+        return json.loads(result.stdout) if result.stdout else []
+    except subprocess.TimeoutExpired:
+        print(f"Warning: gh command timed out: {' '.join(cmd)}", file=sys.stderr)
+        return []
+    except json.JSONDecodeError as e:
+        print(f"Warning: failed to parse gh output: {e}", file=sys.stderr)
+        return []
+    except FileNotFoundError:
+        print("Error: 'gh' CLI not found. Install it from https://cli.github.com/", file=sys.stderr)
+        sys.exit(1)
+
+def get_repos(org): return run_gh(['repo', 'list', org, '--limit', '100', '--json', 'name'])
+def get_merged_prs(org, repo, since, until):
+    return run_gh(['pr', 'list', '-R', f'{org}/{repo}', '--search', f'merged:{since}..{until}', '--state', 'merged', '--limit', '500', '--json', 'number,title,author,mergedAt'])
+def get_open_prs(org, repo):
+    return run_gh(['pr', 'list', '-R', f'{org}/{repo}', '--state', 'open', '--limit', '500', '--json', 'number,title,author,createdAt,isDraft,reviewDecision,labels,body'])
+def get_new_issues(org, repo, since, until):
+    return run_gh(['issue', 'list', '-R', f'{org}/{repo}', '--search', f'created:{since}..{until}', '--limit', '500', '--json', 'number,title,author,createdAt'])
+def get_open_issues_count(org, repo):
+    try:
+        result = subprocess.run(['gh', 'issue', 'list', '-R', f'{org}/{repo}', '--state', 'open', '--limit', '1000'], capture_output=True, text=True, timeout=30)
+        return len([l for l in result.stdout.strip().split('\n') if l.strip()])
+    except: return 0
+def get_workflow_runs(org, repo):
+    return run_gh(['run', 'list', '-R', f'{org}/{repo}', '--limit', '30', '--json', 'name,conclusion,createdAt'])
+
+def analyze_ci(runs):
+    if not runs:
+        return {'passed': 0, 'total': 0, 'pass_rate': None, 'failures': [], 'by_workflow': {}}
+    by_workflow = defaultdict(lambda: {'passed': 0, 'failed': 0, 'other': 0})
+    for run in runs:
+        name = run.get('name', 'unknown')
+        conclusion = run.get('conclusion', '')
+        if conclusion == 'success':
+            by_workflow[name]['passed'] += 1
+        elif conclusion == 'failure':
+            by_workflow[name]['failed'] += 1
+        else:
+            by_workflow[name]['other'] += 1
+    total = len(runs)
+    passed = sum(r.get('conclusion') == 'success' for r in runs)
+    failures = [
+        {'name': name, 'failed': data['failed'], 'passed': data['passed']}
+        for name, data in by_workflow.items() if data['failed'] > 0
+    ]
+    failures.sort(key=lambda x: x['failed'], reverse=True)
+    return {
+        'passed': passed,
+        'total': total,
+        'pass_rate': passed / total if total else None,
+        'failures': failures,
+        'by_workflow': dict(by_workflow),
+    }
+
+_SECURITY_PATTERNS = re.compile(
+    r'\b(api[-_]?key|secret|credential|password|token|cve|exploit|vuln|leak|exposure)\b',
+    re.IGNORECASE
+)
+
+def get_pr_notes(pr):
+    notes = []
+    text_to_scan = (pr.get('title') or '') + ' ' + (pr.get('body') or '')
+    label_names = [l.get('name', '') for l in (pr.get('labels') or [])]
+    label_text = ' '.join(label_names)
+    if _SECURITY_PATTERNS.search(text_to_scan) or _SECURITY_PATTERNS.search(label_text):
+        notes.append('SECURITY')
+    days = days_since(pr.get('createdAt', ''))
+    if days > 14 and not pr.get('isDraft'):
+        notes.append(f'stale ({days}d)')
+    blocked_match = re.search(r'blocked (?:on|by) (#\d+|\w+/\w+#\d+)', text_to_scan, re.IGNORECASE)
+    if blocked_match:
+        notes.append(f'blocked on {blocked_match.group(1)}')
+    return ', '.join(notes)
+
+def categorize_prs(prs):
+    cats = {'ready': [], 'changes': [], 'review': [], 'draft': [], 'total': len(prs)}
+    for pr in prs:
+        if pr.get('isDraft'): cats['draft'].append(pr)
+        elif pr.get('reviewDecision') == 'APPROVED': cats['ready'].append(pr)
+        elif pr.get('reviewDecision') == 'CHANGES_REQUESTED': cats['changes'].append(pr)
+        else: cats['review'].append(pr)
+    return cats
+
+def days_since(date_str):
+    try:
+        d = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        return (datetime.now(d.tzinfo) - d).days
+    except: return 0
+
+def pct(value):
+    return f"{round(value * 100)}%"
+
+def generate_action_items(repos_data):
+    lines = ["## Action Items", ""]
+    has_items = False
+    for r in repos_data:
+        if len(r['open']) > 5:
+            lines.append(f"- **{r['name']}**: High PR load—{len(r['open'])} open PRs.")
+            has_items = True
+        if r['ci']['pass_rate'] is not None and r['ci']['pass_rate'] < 0.5:
+            lines.append(f"- **{r['name']}**: CI failure rate high ({round(r['ci']['pass_rate']*100)}% pass rate).")
+            has_items = True
+    if not has_items:
+        lines.append("- No urgent action items detected.")
+    lines.append("")
+    return lines
+
+def generate_active_epics_section(org, since, until):
+    """Run epic-tracker.py and render the Active Epics section."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    tracker = os.path.join(script_dir, 'epic-tracker.py')
+    lines = ["## Active Epics", ""]
+
+    if not os.path.isfile(tracker):
+        lines.append("*Epic tracker not available.*")
+        return lines
+
+    try:
+        result = subprocess.run(
+            [sys.executable, tracker, '--org', org, '--since', since, '--until', until],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode != 0:
+            lines.append("*Epic tracker failed — see stderr.*")
+            if result.stderr:
+                print(f"epic-tracker stderr: {result.stderr}", file=sys.stderr)
+            return lines
+        data = json.loads(result.stdout)
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
+        lines.append(f"*Epic tracker error: {e}*")
+        return lines
+
+    epics = data.get('epics', [])
+    if not epics:
+        lines.append("*No active epics with activity this period.*")
+        return lines
+
+    if data.get('fallback_mode'):
+        lines.append("*Note: Using activity-based detection (Projects v2 status unavailable).*")
+        lines.append("")
+
+    lines.append("| Epic | Lead | Key Result | This Week |")
+    lines.append("|------|------|------------|-----------|")
+    for e in epics:
+        ref = f"[{e['org']}/{e['repo']}#{e['number']}](https://github.com/{e['org']}/{e['repo']}/issues/{e['number']})"
+        title_clean = re.sub(r'^epic:\s*', '', e['title'], flags=re.IGNORECASE)
+        title_short = title_clean[:50] + '...' if len(title_clean) > 53 else title_clean
+        lead = f"@{e['lead']}" if e['lead'] else "unassigned"
+        kr = e.get('key_result', '') or "—"
+        act = e.get('activity_this_week', {})
+        parts = []
+        if act.get('prs_merged'):
+            parts.append(f"{act['prs_merged']} PR{'s' if act['prs_merged'] != 1 else ''} merged")
+        if act.get('issues_closed'):
+            parts.append(f"{act['issues_closed']} issue{'s' if act['issues_closed'] != 1 else ''} closed")
+        week_summary = ', '.join(parts) if parts else "no activity"
+        lines.append(f"| {ref} {title_short} | {lead} | {kr} | {week_summary} |")
+
+    lines.append("")
+    return lines
+
+def generate_report(org, since, until, enhanced=False):
+    lines = [f"# Org Weekly Report: {since} -- {until}", "", f"*Generated for [{org}](https://github.com/{org})*", ""]
+    repos = get_repos(org)
+    repos_data = []
+    for repo in repos:
+        name = repo['name']
+        merged = get_merged_prs(org, name, since, until)
+        open_prs = get_open_prs(org, name)
+        new_issues = get_new_issues(org, name, since, until)
+        open_count = get_open_issues_count(org, name)
+        workflow_runs = get_workflow_runs(org, name)
+        ci = analyze_ci(workflow_runs)
+        repos_data.append({
+            'name': name,
+            'merged': merged,
+            'open': open_prs,
+            'new': new_issues,
+            'open_count': open_count,
+            'cats': categorize_prs(open_prs),
+            'ci': ci,
+        })
+    repos_data.sort(key=lambda x: len(x['merged']), reverse=True)
+
+    # Summary table
+    lines += ["## Org-Wide Summary", "", "| Repo | Merged PRs | Open PRs | Open Issues | New Issues | CI Pass Rate | Status |", "|------|-----------|----------|-------------|------------|--------------|--------|"]
+    totals = {'m': 0, 'o': 0, 'i': 0, 'n': 0}
+    for d in repos_data:
+        m, o, n, i = len(d['merged']), len(d['open']), len(d['new']), d['open_count']
+        totals['m'] += m; totals['o'] += o; totals['i'] += i; totals['n'] += n
+        status = "active" if (m > 0 or o > 5) else "quiet"
+        ci = d['ci']
+        ci_display = f"{ci['passed']}/{ci['total']} ({pct(ci['pass_rate'])})" if ci['pass_rate'] is not None else "--"
+        lines.append(f"| [{d['name']}](https://github.com/{org}/{d['name']}) | {m} | {o} | {i} | {n} | {ci_display} | {status} |")
+    lines.append(f"| **TOTAL** | **{totals['m']}** | **{totals['o']}** | **{totals['i']}** | **{totals['n']}** | | |")
+    lines.append("")
+
+    # Active Epics (populated by epic-tracker.py output)
+    lines += generate_active_epics_section(org, since, until)
+    lines.append("")
+
+    # Action Items
+    lines += generate_action_items(repos_data)
+    lines.append("")
+
+    # Cross-Repo Highlights
+    lines += ["## Cross-Repo Highlights", ""]
+    contrib_repos = defaultdict(set)
+    contrib_counts = defaultdict(int)
+    for d in repos_data:
+        for pr in d['merged']:
+            a = pr.get('author', {}).get('login')
+            if a:
+                contrib_repos[a].add(d['name'])
+                contrib_counts[a] += 1
+    multi = [(u, sorted(contrib_repos[u]), contrib_counts[u]) for u, r in contrib_repos.items() if len(r) > 1]
+    multi.sort(key=lambda x: len(x[1]), reverse=True)
+    if multi:
+        for u, repos_list, pc in multi[:5]:
+            lines.append(f"- **@{u}** contributed to {', '.join(repos_list)} — {pc} PRs merged")
+        lines.append("")
+
+    # CI concerns highlight
+    ci_concern_repos = [d for d in repos_data if d['ci']['pass_rate'] is not None and d['ci']['pass_rate'] < 0.5 and d['ci']['total'] >= 5]
+    if ci_concern_repos:
+        for d in ci_concern_repos:
+            ci = d['ci']
+            failing_names = ', '.join(f['name'] for f in ci['failures'][:2])
+            lines.append(f"- **CI concern**: {d['name']} at {pct(ci['pass_rate'])} pass rate — failing: {failing_names or 'unknown'}")
+        lines.append("")
+
+    # Security-flagged PRs
+    security_prs = []
+    for d in repos_data:
+        for pr in d['open']:
+            notes = get_pr_notes(pr)
+            if 'SECURITY' in notes:
+                security_prs.append((d['name'], pr))
+    if security_prs:
+        lines.append("- **Security concern**: unreviewed security-related PRs:")
+        for repo_name, pr in security_prs[:3]:
+            lines.append(f"  - [{org}/{repo_name}#{pr['number']}](https://github.com/{org}/{repo_name}/pull/{pr['number']}) — {pr['title'][:80]}")
+        lines.append("")
+
+    # Dependabot wave
+    dependabot_open = sum(
+        sum(1 for pr in d['open'] if (pr.get('author') or {}).get('login', '') in ('dependabot[bot]', 'app/dependabot', 'dependabot'))
+        for d in repos_data
+    )
+    if dependabot_open > 10:
+        lines.append(f"- **Dependabot wave**: {dependabot_open} dependabot PRs awaiting review across org. Consider batching.")
+        lines.append("")
+
+    if repos_data and repos_data[0]['merged'] and len(repos_data[0]['merged']) > 20:
+        lines.append(f"- **{repos_data[0]['name']}** saw massive activity ({len(repos_data[0]['merged'])} merged PRs)")
+        lines.append("")
+
+    lines += ["---", ""]
+
+    # Per-repo deep dives
+    for d in repos_data:
+        if not d['merged'] and not d['open'] and not d['new']: continue
+        lines += [f"## {d['name']}", ""]
+
+        # Merged PRs
+        if d['merged']:
+            lines.append(f"### Merged PRs ({len(d['merged'])})")
+            cc = defaultdict(int)
+            for pr in d['merged']: cc[pr.get('author', {}).get('login', 'unknown')] += 1
+            top = sorted(cc.items(), key=lambda x: x[1], reverse=True)[:5]
+            if top: lines.append(f"**Top contributors:** {', '.join(f'@{u} ({c})' for u, c in top)}"); lines.append("")
+            lines += ["| # | Title | Author | Merged |", "|---|-------|--------|--------|"]
+            for pr in d['merged'][:15]:
+                t = pr['title'][:57] + '...' if len(pr['title']) > 60 else pr['title']
+                a = pr.get('author', {}).get('login', 'unknown')
+                m = pr.get('mergedAt', '--')[:10]
+                lines.append(f"| [#{pr['number']}](https://github.com/{org}/{d['name']}/pull/{pr['number']}) | {t} | @{a} | {m} |")
+            if len(d['merged']) > 15: lines.append(f"| ... | +{len(d['merged'])-15} more | | |")
+            lines.append("")
+
+        # Open PRs
+        if d['open']:
+            c = d['cats']
+            lines.append(f"### Open PRs ({len(d['open'])})")
+            lines.append("")
+
+            def pr_row_with_notes(pr, org=org, repo=d['name'], show_days=True):
+                t = pr['title'][:50] + '...' if len(pr['title']) > 53 else pr['title']
+                a = pr.get('author', {}).get('login', '--')
+                link = f"[#{pr['number']}](https://github.com/{org}/{repo}/pull/{pr['number']})"
+                notes = get_pr_notes(pr)
+                if show_days:
+                    days = days_since(pr.get('createdAt', ''))
+                    return f"| {link} | {t} | @{a} | {days} | {notes} |"
+                else:
+                    return f"| {link} | {t} | @{a} | {notes} |"
+
+            if c['ready']:
+                lines.append(f"#### Ready to Merge ({len(c['ready'])})")
+                lines += ["| # | Title | Author | Notes |", "|---|-------|--------|-------|"]
+                for pr in c['ready'][:5]:
+                    lines.append(pr_row_with_notes(pr, show_days=False))
+                lines.append("")
+            if c['changes']:
+                lines.append(f"#### Changes Requested ({len(c['changes'])})")
+                lines += ["| # | Title | Author | Days | Notes |", "|---|-------|--------|------|-------|"]
+                for pr in c['changes'][:5]:
+                    lines.append(pr_row_with_notes(pr))
+                lines.append("")
+            if c['review']:
+                lines.append(f"#### Needs Review ({len(c['review'])})")
+                lines += ["| # | Title | Author | Days | Notes |", "|---|-------|--------|------|-------|"]
+                for pr in c['review'][:8]:
+                    lines.append(pr_row_with_notes(pr))
+                if len(c['review']) > 8: lines.append(f"| ... | +{len(c['review'])-8} more | | | |")
+                lines.append("")
+            if c['draft']:
+                lines.append(f"#### Draft PRs ({len(c['draft'])})")
+                if len(c['draft']) <= 5:
+                    for pr in c['draft']: lines.append(f"- [#{pr['number']}](https://github.com/{org}/{d['name']}/pull/{pr['number']}) — {pr['title']}")
+                else:
+                    authors = list(set(p.get('author', {}).get('login') for p in c['draft'] if p.get('author')))
+                    lines.append(f"{len(c['draft'])} drafts from {', '.join(f'@{a}' for a in authors)}")
+                lines.append("")
+
+        # CI Health
+        ci = d['ci']
+        if ci['total'] > 0:
+            lines.append("### CI Health")
+            rate_str = f"{ci['passed']}/{ci['total']} ({pct(ci['pass_rate'])})"
+            lines.append(f"- {rate_str} passed")
+            for f in ci['failures'][:3]:
+                lines.append(f"- **Failing**: \"{f['name']}\" — {f['failed']} failure(s)")
+            lines.append("")
+
+        # New Issues
+        if d['new']:
+            lines.append(f"### New Issues ({len(d['new'])})")
+            lines += ["| # | Title | Created |", "|---|-------|---------|"]
+            for issue in d['new']:
+                t = issue['title'][:57] + '...' if len(issue['title']) > 60 else issue['title']
+                c = issue.get('createdAt', '--')[:10]
+                lines.append(f"| [#{issue['number']}](https://github.com/{org}/{d['name']}/issues/{issue['number']}) | {t} | {c} |")
+            lines.append("")
+
+    return '\n'.join(lines), repos_data
+
+def run_epic_tracker(org, since, until):
+    """Run epic-tracker.py and return parsed JSON, or None on failure."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    tracker = os.path.join(script_dir, 'epic-tracker.py')
+    if not os.path.isfile(tracker):
+        return None
+    try:
+        result = subprocess.run(
+            [sys.executable, tracker, '--org', org, '--since', since, '--until', until],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode != 0:
+            return None
+        return json.loads(result.stdout)
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+        return None
+
+
+def build_json_output(org, since, until, repos_data):
+    """Build structured JSON suitable for AI synthesis of highlights and action items."""
+    result = {
+        'org': org,
+        'period': {'since': since, 'until': until},
+        'repos': [],
+    }
+
+    epic_data = run_epic_tracker(org, since, until)
+    if epic_data:
+        result['active_epics'] = epic_data
+    for d in repos_data:
+        open_prs_enriched = []
+        for pr in d['open']:
+            open_prs_enriched.append({
+                'number': pr['number'],
+                'title': pr['title'],
+                'author': (pr.get('author') or {}).get('login', 'unknown'),
+                'days_open': days_since(pr.get('createdAt', '')),
+                'status': ('draft' if pr.get('isDraft') else
+                           pr.get('reviewDecision', 'REVIEW_REQUIRED') or 'REVIEW_REQUIRED'),
+                'notes': get_pr_notes(pr),
+                'labels': [l.get('name', '') for l in (pr.get('labels') or [])],
+                'url': f"https://github.com/{org}/{d['name']}/pull/{pr['number']}",
+            })
+        result['repos'].append({
+            'name': d['name'],
+            'merged_prs': [
+                {
+                    'number': pr['number'],
+                    'title': pr['title'],
+                    'author': (pr.get('author') or {}).get('login', 'unknown'),
+                    'merged_at': (pr.get('mergedAt') or '')[:10],
+                }
+                for pr in d['merged']
+            ],
+            'open_prs': open_prs_enriched,
+            'open_prs_summary': {
+                'ready': len(d['cats']['ready']),
+                'changes_requested': len(d['cats']['changes']),
+                'needs_review': len(d['cats']['review']),
+                'draft': len(d['cats']['draft']),
+                'total': len(d['open']),
+            },
+            'new_issues': [
+                {
+                    'number': i['number'],
+                    'title': i['title'],
+                    'created_at': (i.get('createdAt') or '')[:10],
+                    'url': f"https://github.com/{org}/{d['name']}/issues/{i['number']}",
+                }
+                for i in d['new']
+            ],
+            'open_issues_count': d['open_count'],
+            'ci': {
+                'passed': d['ci']['passed'],
+                'total': d['ci']['total'],
+                'pass_rate': round(d['ci']['pass_rate'] * 100) if d['ci']['pass_rate'] is not None else None,
+                'failing_workflows': [
+                    {'name': f['name'], 'failures': f['failed']}
+                    for f in d['ci']['failures']
+                ],
+            },
+        })
+    return result
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument('--org', required=True)
+    p.add_argument('--since')
+    p.add_argument('--until')
+    p.add_argument('--output')
+    p.add_argument('--json-output', metavar='PATH', help='Write structured JSON data for AI synthesis')
+    p.add_argument('--enhanced', action='store_true', help='Include additional metrics (reserved for future use)')
+    args = p.parse_args()
+    since = args.since or (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+    until = args.until or datetime.now().strftime('%Y-%m-%d')
+
+    report, repos_data = generate_report(args.org, since, until, args.enhanced)
+
+    if args.output:
+        with open(args.output, 'w') as f: f.write(report)
+        print(f"Report written to: {args.output}")
+    else:
+        print(report)
+
+    if args.json_output:
+        data = build_json_output(args.org, since, until, repos_data)
+        with open(args.json_output, 'w') as f:
+            json.dump(data, f, indent=2)
+        print(f"JSON data written to: {args.json_output}", file=sys.stderr)
+
+if __name__ == '__main__': main()
