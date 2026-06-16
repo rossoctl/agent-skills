@@ -100,30 +100,33 @@ def get_activity_via_timeline(org, repo, epic_number, since):
         return {'prs_merged': 0, 'issues_closed': 0, 'pr_numbers': []}
 
 
-def query_projects_v2_status(org):
-    """Query GitHub Projects v2 for epic statuses. Returns {issue_url: status} map."""
+PROJECT_NUMBER = 8  # "Kagenti Issue Prioritization" — the board clawgenti can access
+
+
+def query_projects_v2_status(org, project_number=PROJECT_NUMBER):
+    """Query a specific GitHub Projects v2 board for issue statuses.
+
+    Returns {issue_url: status} map, or None on failure.
+    """
     query = """
-    query($org: String!) {
+    query($org: String!, $num: Int!) {
       organization(login: $org) {
-        projectsV2(first: 20) {
-          nodes {
-            title
-            number
-            items(first: 100) {
-              nodes {
-                content {
-                  ... on Issue {
-                    url
-                    number
-                    repository { name }
-                  }
+        projectV2(number: $num) {
+          title
+          items(first: 100) {
+            nodes {
+              content {
+                ... on Issue {
+                  url
+                  number
+                  repository { name }
                 }
-                fieldValues(first: 10) {
-                  nodes {
-                    ... on ProjectV2ItemFieldSingleSelectValue {
-                      name
-                      field { ... on ProjectV2SingleSelectField { name } }
-                    }
+              }
+              fieldValues(first: 10) {
+                nodes {
+                  ... on ProjectV2ItemFieldSingleSelectValue {
+                    name
+                    field { ... on ProjectV2SingleSelectField { name } }
                   }
                 }
               }
@@ -134,7 +137,9 @@ def query_projects_v2_status(org):
     }
     """
     result = subprocess.run(
-        ['gh', 'api', 'graphql', '-F', f'org={org}', '-f', f'query={query}'],
+        ['gh', 'api', 'graphql',
+         '-F', f'org={org}', '-F', f'num={project_number}',
+         '-f', f'query={query}'],
         capture_output=True, text=True, timeout=30
     )
     if result.returncode != 0:
@@ -145,18 +150,20 @@ def query_projects_v2_status(org):
     except json.JSONDecodeError:
         return None
 
+    project = data.get('data', {}).get('organization', {}).get('projectV2')
+    if not project:
+        return None
+
     status_map = {}
-    projects = data.get('data', {}).get('organization', {}).get('projectsV2', {}).get('nodes', [])
-    for project in projects:
-        for item in project.get('items', {}).get('nodes', []):
-            content = item.get('content')
-            if not content or 'url' not in content:
-                continue
-            url = content['url']
-            for fv in item.get('fieldValues', {}).get('nodes', []):
-                field = fv.get('field', {})
-                if field.get('name', '').lower() == 'status':
-                    status_map[url] = fv.get('name', '')
+    for item in project.get('items', {}).get('nodes', []):
+        content = item.get('content')
+        if not content or 'url' not in content:
+            continue
+        url = content['url']
+        for fv in item.get('fieldValues', {}).get('nodes', []):
+            field = fv.get('field', {})
+            if field.get('name', '').lower() == 'status':
+                status_map[url] = fv.get('name', '')
     return status_map
 
 
@@ -214,8 +221,8 @@ def main():
         updated_in_period = updated_at >= since
 
         if not fallback_mode and status_map:
-            is_in_progress = status.lower() in ('in progress', 'in-progress', 'active')
-            if not is_in_progress and not has_activity:
+            is_tracked = status.lower() in ('in progress', 'in-progress', 'active', 'epics')
+            if not is_tracked and not has_activity:
                 continue
         else:
             if not updated_in_period and not has_activity:
