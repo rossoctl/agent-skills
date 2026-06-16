@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """GitHub Weekly Report Generator"""
-import json, os, subprocess, sys, argparse, re
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
 from datetime import datetime, timedelta
 from collections import defaultdict
 
@@ -31,9 +36,10 @@ def get_new_issues(org, repo, since, until):
     return run_gh(['issue', 'list', '-R', f'{org}/{repo}', '--search', f'created:{since}..{until}', '--limit', '500', '--json', 'number,title,author,createdAt'])
 def get_open_issues_count(org, repo):
     try:
-        result = subprocess.run(['gh', 'issue', 'list', '-R', f'{org}/{repo}', '--state', 'open', '--limit', '1000'], capture_output=True, text=True, timeout=30)
-        return len([l for l in result.stdout.strip().split('\n') if l.strip()])
-    except: return 0
+        result = subprocess.run(['gh', 'issue', 'list', '-R', f'{org}/{repo}', '--state', 'open', '--limit', '1000', '--json', 'number'], capture_output=True, text=True, timeout=30)
+        return len(json.loads(result.stdout)) if result.returncode == 0 else 0
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
+        return 0
 def get_workflow_runs(org, repo):
     return run_gh(['run', 'list', '-R', f'{org}/{repo}', '--limit', '30', '--json', 'name,conclusion,createdAt'])
 
@@ -98,7 +104,8 @@ def days_since(date_str):
     try:
         d = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
         return (datetime.now(d.tzinfo) - d).days
-    except: return 0
+    except (ValueError, AttributeError, TypeError):
+        return 0
 
 def pct(value):
     return f"{round(value * 100)}%"
@@ -118,15 +125,17 @@ def generate_action_items(repos_data):
     lines.append("")
     return lines
 
-def generate_active_epics_section(org, since, until):
-    """Run epic-tracker.py and render the Active Epics section."""
+def run_epic_tracker(org, since, until):
+    """Run epic-tracker.py once and return its parsed JSON.
+
+    Returns a dict on success, or a dict with an 'error' key describing why
+    it could not run (so the caller can render a useful placeholder).
+    """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     tracker = os.path.join(script_dir, 'epic-tracker.py')
-    lines = ["## Active Epics", ""]
 
     if not os.path.isfile(tracker):
-        lines.append("*Epic tracker not available.*")
-        return lines
+        return {'error': 'Epic tracker not available.'}
 
     try:
         result = subprocess.run(
@@ -134,13 +143,19 @@ def generate_active_epics_section(org, since, until):
             capture_output=True, text=True, timeout=120
         )
         if result.returncode != 0:
-            lines.append("*Epic tracker failed — see stderr.*")
             if result.stderr:
                 print(f"epic-tracker stderr: {result.stderr}", file=sys.stderr)
-            return lines
-        data = json.loads(result.stdout)
+            return {'error': 'Epic tracker failed — see stderr.'}
+        return json.loads(result.stdout)
     except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
-        lines.append(f"*Epic tracker error: {e}*")
+        return {'error': f'Epic tracker error: {e}'}
+
+def render_active_epics_section(data):
+    """Render the Active Epics markdown section from epic-tracker output."""
+    lines = ["## Active Epics", ""]
+
+    if data.get('error'):
+        lines.append(f"*{data['error']}*")
         return lines
 
     epics = data.get('epics', [])
@@ -260,8 +275,9 @@ def generate_report(org, since, until, enhanced=False):
         lines.append(f"- **{repos_data[0]['name']}** saw massive activity ({len(repos_data[0]['merged'])} merged PRs)")
         lines.append("")
 
-    # Active Epics (populated by epic-tracker.py output)
-    lines += generate_active_epics_section(org, since, until)
+    # Active Epics — run the tracker once and reuse for both markdown and JSON
+    epic_data = run_epic_tracker(org, since, until)
+    lines += render_active_epics_section(epic_data)
     lines.append("")
 
     # Action Items
@@ -356,27 +372,9 @@ def generate_report(org, since, until, enhanced=False):
                 lines.append(f"| [#{issue['number']}](https://github.com/{org}/{d['name']}/issues/{issue['number']}) | {t} | {c} |")
             lines.append("")
 
-    return '\n'.join(lines), repos_data
+    return '\n'.join(lines), repos_data, epic_data
 
-def run_epic_tracker(org, since, until):
-    """Run epic-tracker.py and return parsed JSON, or None on failure."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    tracker = os.path.join(script_dir, 'epic-tracker.py')
-    if not os.path.isfile(tracker):
-        return None
-    try:
-        result = subprocess.run(
-            [sys.executable, tracker, '--org', org, '--since', since, '--until', until],
-            capture_output=True, text=True, timeout=120
-        )
-        if result.returncode != 0:
-            return None
-        return json.loads(result.stdout)
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
-        return None
-
-
-def build_json_output(org, since, until, repos_data):
+def build_json_output(org, since, until, repos_data, epic_data=None):
     """Build structured JSON suitable for AI synthesis of highlights and action items."""
     result = {
         'org': org,
@@ -384,8 +382,7 @@ def build_json_output(org, since, until, repos_data):
         'repos': [],
     }
 
-    epic_data = run_epic_tracker(org, since, until)
-    if epic_data:
+    if epic_data and not epic_data.get('error'):
         result['active_epics'] = epic_data
     for d in repos_data:
         open_prs_enriched = []
@@ -454,7 +451,7 @@ def main():
     since = args.since or (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
     until = args.until or datetime.now().strftime('%Y-%m-%d')
 
-    report, repos_data = generate_report(args.org, since, until, args.enhanced)
+    report, repos_data, epic_data = generate_report(args.org, since, until, args.enhanced)
 
     if args.output:
         with open(args.output, 'w') as f: f.write(report)
@@ -463,7 +460,7 @@ def main():
         print(report)
 
     if args.json_output:
-        data = build_json_output(args.org, since, until, repos_data)
+        data = build_json_output(args.org, since, until, repos_data, epic_data)
         with open(args.json_output, 'w') as f:
             json.dump(data, f, indent=2)
         print(f"JSON data written to: {args.json_output}", file=sys.stderr)
