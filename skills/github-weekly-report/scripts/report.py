@@ -95,10 +95,14 @@ def get_pr_notes(pr):
 def categorize_prs(prs):
     cats = {'ready': [], 'changes': [], 'review': [], 'draft': [], 'total': len(prs)}
     for pr in prs:
-        if pr.get('isDraft'): cats['draft'].append(pr)
-        elif pr.get('reviewDecision') == 'APPROVED': cats['ready'].append(pr)
-        elif pr.get('reviewDecision') == 'CHANGES_REQUESTED': cats['changes'].append(pr)
-        else: cats['review'].append(pr)
+        if pr.get('isDraft'):
+            cats['draft'].append(pr)
+        elif pr.get('reviewDecision') == 'APPROVED':
+            cats['ready'].append(pr)
+        elif pr.get('reviewDecision') == 'CHANGES_REQUESTED':
+            cats['changes'].append(pr)
+        else:
+            cats['review'].append(pr)
     return cats
 
 def days_since(date_str):
@@ -110,6 +114,16 @@ def days_since(date_str):
 
 def pct(value):
     return f"{round(value * 100)}%"
+
+def pr_row_with_notes(pr, org, repo, show_days=True):
+    t = pr['title'][:50] + '...' if len(pr['title']) > 53 else pr['title']
+    a = pr.get('author', {}).get('login', '--')
+    link = f"[#{pr['number']}](https://github.com/{org}/{repo}/pull/{pr['number']})"
+    notes = get_pr_notes(pr)
+    if show_days:
+        days = days_since(pr.get('createdAt', ''))
+        return f"| {link} | {t} | @{a} | {days} | {notes} |"
+    return f"| {link} | {t} | @{a} | {notes} |"
 
 def generate_action_items(repos_data):
     lines = ["## Action Items", ""]
@@ -289,14 +303,16 @@ def generate_report(org, since, until, enhanced=False):
 
     # Per-repo deep dives
     for d in repos_data:
-        if not d['merged'] and not d['open'] and not d['new']: continue
+        if not d['merged'] and not d['open'] and not d['new']:
+            continue
         lines += [f"## {d['name']}", ""]
 
         # Merged PRs
         if d['merged']:
             lines.append(f"### Merged PRs ({len(d['merged'])})")
             cc = defaultdict(int)
-            for pr in d['merged']: cc[pr.get('author', {}).get('login', 'unknown')] += 1
+            for pr in d['merged']:
+                cc[pr.get('author', {}).get('login', 'unknown')] += 1
             top = sorted(cc.items(), key=lambda x: x[1], reverse=True)[:5]
             if top:
                 lines.append(f"**Top contributors:** {', '.join(f'@{u} ({c})' for u, c in top)}")
@@ -307,7 +323,8 @@ def generate_report(org, since, until, enhanced=False):
                 a = pr.get('author', {}).get('login', 'unknown')
                 m = pr.get('mergedAt', '--')[:10]
                 lines.append(f"| [#{pr['number']}](https://github.com/{org}/{d['name']}/pull/{pr['number']}) | {t} | @{a} | {m} |")
-            if len(d['merged']) > 15: lines.append(f"| ... | +{len(d['merged'])-15} more | | |")
+            if len(d['merged']) > 15:
+                lines.append(f"| ... | +{len(d['merged'])-15} more | | |")
             lines.append("")
 
         # Open PRs
@@ -316,40 +333,31 @@ def generate_report(org, since, until, enhanced=False):
             lines.append(f"### Open PRs ({len(d['open'])})")
             lines.append("")
 
-            def pr_row_with_notes(pr, org=org, repo=d['name'], show_days=True):
-                t = pr['title'][:50] + '...' if len(pr['title']) > 53 else pr['title']
-                a = pr.get('author', {}).get('login', '--')
-                link = f"[#{pr['number']}](https://github.com/{org}/{repo}/pull/{pr['number']})"
-                notes = get_pr_notes(pr)
-                if show_days:
-                    days = days_since(pr.get('createdAt', ''))
-                    return f"| {link} | {t} | @{a} | {days} | {notes} |"
-                else:
-                    return f"| {link} | {t} | @{a} | {notes} |"
-
             if c['ready']:
                 lines.append(f"#### Ready to Merge ({len(c['ready'])})")
                 lines += ["| # | Title | Author | Notes |", "|---|-------|--------|-------|"]
                 for pr in c['ready'][:5]:
-                    lines.append(pr_row_with_notes(pr, show_days=False))
+                    lines.append(pr_row_with_notes(pr, org, d['name'], show_days=False))
                 lines.append("")
             if c['changes']:
                 lines.append(f"#### Changes Requested ({len(c['changes'])})")
                 lines += ["| # | Title | Author | Days | Notes |", "|---|-------|--------|------|-------|"]
                 for pr in c['changes'][:5]:
-                    lines.append(pr_row_with_notes(pr))
+                    lines.append(pr_row_with_notes(pr, org, d['name']))
                 lines.append("")
             if c['review']:
                 lines.append(f"#### Needs Review ({len(c['review'])})")
                 lines += ["| # | Title | Author | Days | Notes |", "|---|-------|--------|------|-------|"]
                 for pr in c['review'][:8]:
-                    lines.append(pr_row_with_notes(pr))
-                if len(c['review']) > 8: lines.append(f"| ... | +{len(c['review'])-8} more | | | |")
+                    lines.append(pr_row_with_notes(pr, org, d['name']))
+                if len(c['review']) > 8:
+                    lines.append(f"| ... | +{len(c['review'])-8} more | | | |")
                 lines.append("")
             if c['draft']:
                 lines.append(f"#### Draft PRs ({len(c['draft'])})")
                 if len(c['draft']) <= 5:
-                    for pr in c['draft']: lines.append(f"- [#{pr['number']}](https://github.com/{org}/{d['name']}/pull/{pr['number']}) — {pr['title']}")
+                    for pr in c['draft']:
+                        lines.append(f"- [#{pr['number']}](https://github.com/{org}/{d['name']}/pull/{pr['number']}) — {pr['title']}")
                 else:
                     authors = list(set(p.get('author', {}).get('login') for p in c['draft'] if p.get('author')))
                     lines.append(f"{len(c['draft'])} drafts from {', '.join(f'@{a}' for a in authors)}")
@@ -457,7 +465,8 @@ def main():
     report, repos_data, epic_data = generate_report(args.org, since, until, args.enhanced)
 
     if args.output:
-        with open(args.output, 'w') as f: f.write(report)
+        with open(args.output, 'w') as f:
+            f.write(report)
         print(f"Report written to: {args.output}")
     else:
         print(report)
@@ -468,4 +477,5 @@ def main():
             json.dump(data, f, indent=2)
         print(f"JSON data written to: {args.json_output}", file=sys.stderr)
 
-if __name__ == '__main__': main()
+if __name__ == '__main__':
+    main()
