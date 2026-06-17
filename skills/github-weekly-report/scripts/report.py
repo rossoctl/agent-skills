@@ -27,7 +27,8 @@ def run_gh(args):
         print("Error: 'gh' CLI not found. Install it from https://cli.github.com/", file=sys.stderr)
         sys.exit(1)
 
-def get_repos(org): return run_gh(['repo', 'list', org, '--limit', '100', '--json', 'name'])
+def get_repos(org):
+    return run_gh(['repo', 'list', org, '--limit', '100', '--json', 'name'])
 def get_merged_prs(org, repo, since, until):
     return run_gh(['pr', 'list', '-R', f'{org}/{repo}', '--search', f'merged:{since}..{until}', '--state', 'merged', '--limit', '500', '--json', 'number,title,author,mergedAt'])
 def get_open_prs(org, repo):
@@ -297,7 +298,9 @@ def generate_report(org, since, until, enhanced=False):
             cc = defaultdict(int)
             for pr in d['merged']: cc[pr.get('author', {}).get('login', 'unknown')] += 1
             top = sorted(cc.items(), key=lambda x: x[1], reverse=True)[:5]
-            if top: lines.append(f"**Top contributors:** {', '.join(f'@{u} ({c})' for u, c in top)}"); lines.append("")
+            if top:
+                lines.append(f"**Top contributors:** {', '.join(f'@{u} ({c})' for u, c in top)}")
+                lines.append("")
             lines += ["| # | Title | Author | Merged |", "|---|-------|--------|--------|"]
             for pr in d['merged'][:15]:
                 t = pr['title'][:57] + '...' if len(pr['title']) > 60 else pr['title']
