@@ -79,18 +79,35 @@ def extract_key_result(body):
     return ""
 
 
-def get_activity_via_timeline(org, repo, epic_number, since):
-    """Check timeline for cross-referenced PRs merged since the given date."""
+def get_activity_via_timeline(org, repo, epic_number, since, until):
+    """Count cross-referenced closed PRs whose reference falls within the window.
+
+    The timeline 'cross-referenced' event carries its own created_at (when the
+    reference was made). Filtering on it bounds activity to the reporting window
+    instead of counting every cross-reference over the epic's lifetime. The
+    window is [since, until] inclusive (date-only comparison, ISO timestamps
+    sort lexically).
+    """
+    # until is a date (YYYY-MM-DD); make the upper bound inclusive of that day.
+    until_end = f"{until}T23:59:59Z"
+    jq_filter = (
+        '.[] '
+        '| select(.event == "cross-referenced") '
+        '| select(.source.issue.pull_request != null) '
+        '| select(.source.issue.state == "closed") '
+        f'| select(.created_at >= "{since}" and .created_at <= "{until_end}") '
+        '| .source.issue.number'
+    )
     try:
         result = subprocess.run(
             ['gh', 'api', f'repos/{org}/{repo}/issues/{epic_number}/timeline',
-             '--paginate', '--jq',
-             f'.[] | select(.event == "cross-referenced") | select(.source.issue.pull_request != null) | select(.source.issue.state == "closed") | .source.issue.number'],
+             '--paginate', '--jq', jq_filter],
             capture_output=True, text=True, timeout=15
         )
         if result.returncode != 0:
             return {'prs_merged': 0, 'issues_closed': 0, 'pr_numbers': []}
-        numbers = [int(n) for n in result.stdout.strip().split('\n') if n.strip()]
+        # A PR can be cross-referenced more than once; dedupe.
+        numbers = sorted({int(n) for n in result.stdout.strip().split('\n') if n.strip()})
         return {
             'prs_merged': len(numbers),
             'issues_closed': 0,
@@ -216,7 +233,7 @@ def main():
         if status_map and url in status_map:
             status = status_map[url]
 
-        activity = get_activity_via_timeline(args.org, epic['repo'], epic['number'], since)
+        activity = get_activity_via_timeline(args.org, epic['repo'], epic['number'], since, until)
         has_activity = activity['prs_merged'] > 0
         updated_in_period = updated_at >= since
 

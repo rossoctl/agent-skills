@@ -368,8 +368,8 @@ def generate_report(org, since, until, enhanced=False):
             lines += ["| # | Title | Created |", "|---|-------|---------|"]
             for issue in d['new']:
                 t = issue['title'][:57] + '...' if len(issue['title']) > 60 else issue['title']
-                c = issue.get('createdAt', '--')[:10]
-                lines.append(f"| [#{issue['number']}](https://github.com/{org}/{d['name']}/issues/{issue['number']}) | {t} | {c} |")
+                created_date = issue.get('createdAt', '--')[:10]
+                lines.append(f"| [#{issue['number']}](https://github.com/{org}/{d['name']}/issues/{issue['number']}) | {t} | {created_date} |")
             lines.append("")
 
     return '\n'.join(lines), repos_data, epic_data
