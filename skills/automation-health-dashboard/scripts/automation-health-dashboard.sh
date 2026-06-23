@@ -95,9 +95,9 @@ if [ -f "$PR_REVIEW_DIR/fixer-history.json" ]; then
   HAS_PR_REVIEW=true
 fi
 
-if [ "$HAS_LINK_HEALTH" = false ] && [ "$HAS_DEP_BUMP" = false ]; then
+if [ "$HAS_LINK_HEALTH" = false ] && [ "$HAS_DEP_BUMP" = false ] && [ "$HAS_PR_REVIEW" = false ]; then
   echo "ERROR: No program reports found in $REPORTS_DIR"
-  echo "Expected: $LINK_SCAN_DIR/latest.json and/or $DEP_BUMP_DIR/latest.json"
+  echo "Expected one of: $LINK_SCAN_DIR/latest.json, $DEP_BUMP_DIR/latest.json, $PR_REVIEW_DIR/fixer-history.json"
   exit 1
 fi
 
