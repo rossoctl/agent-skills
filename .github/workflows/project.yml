@@ -1,0 +1,25 @@
+name: Kagenti Project Automation
+
+on:
+  issues:
+    types: [opened]
+  pull_request:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  add:
+    name: Add item to Kagenti Project
+
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: read
+
+    # The reusable add-to-project.yml@99700eb declares `on: workflow_call:`
+    # with NO `secrets:` block — it bare-references `${{ secrets.ADD_TO_PROJECT_PAT }}`
+    # in a step. GitHub errors if a caller passes a secret the callee did not
+    # declare, so this must use `secrets: inherit` (not explicit passing).
+    uses: kagenti/.github/.github/workflows/add-to-project.yml@99700ebe858a1bc566492b1de9aea6e764ee226f # 2026-05-05
+    secrets: inherit
