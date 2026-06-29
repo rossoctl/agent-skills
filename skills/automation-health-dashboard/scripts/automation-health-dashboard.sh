@@ -320,9 +320,10 @@ if [ "$HAS_PR_REVIEW" = true ]; then
   fi
 
   # Trend: last 10 fixer runs (reviewed / processed / failed)
+  # Date + time (UTC, to the minute) so multiple runs on the same day stay distinct.
   PR_TREND_TABLE=$(jq -r '
     .[-10:] | reverse | .[] |
-    "| \(.date | split("T")[0]) | \(.prs_reviewed // 0) | \(.prs_processed // 0) | \(.prs_failed // 0) |"
+    "| \(.date[0:16] | sub("T";" ")) | \(.prs_reviewed // 0) | \(.prs_processed // 0) | \(.prs_failed // 0) |"
   ' "$PR_REVIEW_DIR/fixer-history.json" 2>/dev/null || echo "| - | - | - | - |")
 
   if [ "$VERBOSE" = true ]; then
@@ -506,8 +507,8 @@ Reviewed vs. unreviewed (secondary — interpret with care):
 
 ### Review Activity (last 10 runs)
 
-| Date | Reviewed | Processed | Failed |
-|------|----------|-----------|--------|
+| Date (UTC) | Reviewed | Processed | Failed |
+|------------|----------|-----------|--------|
 $PR_TREND_TABLE
 
 ## Cross-Program Coverage
