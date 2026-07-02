@@ -117,6 +117,80 @@ def get_activity_via_timeline(org, repo, epic_number, since, until):
         return {'prs_merged': 0, 'issues_closed': 0, 'pr_numbers': []}
 
 
+def get_sub_issue_activity(org, repo, epic_number, since, until):
+    """Count an epic's sub-issues that are open or were closed in the window.
+
+    This is the PRIMARY activity signal: teams often park active epics in an
+    "Epics" board column rather than "In Progress", making board Status an
+    unreliable gate. Sub-issues come from the plain REST sub_issues endpoint,
+    which needs no read:project scope. An epic is "active" if it has any open
+    sub-issue (backlog / in-progress) or any sub-issue closed within
+    [since, until] inclusive.
+
+    Server-side --jq is required: raw sub-issue bodies contain control chars
+    that break client-side json parsing (same reason as elsewhere in this file).
+    Returns {open, closed_recent, closed_recent_numbers, latest_closed_at, total}.
+    latest_closed_at is the most recent in-window closure timestamp ("" if none)
+    — used for recency-based ranking so a single bulk-close epic does not crowd
+    out low-volume but freshly-active epics.
+    """
+    until_end = f"{until}T23:59:59Z"
+    since_start = f"{since}T00:00:00Z"
+    in_window = (
+        f'select((.closed_at // "") >= "{since_start}" and (.closed_at // "") <= "{until_end}")'
+    )
+    open_filter = '[.[] | select(.state == "open")] | length'
+    closed_filter = f'[.[] | select(.state == "closed") | {in_window} | .number]'
+    latest_filter = f'[.[] | select(.state == "closed") | {in_window} | .closed_at] | max // ""'
+    total_filter = 'length'
+    empty = {'open': 0, 'closed_recent': 0, 'closed_recent_numbers': [],
+             'latest_closed_at': '', 'total': 0}
+    try:
+        base = ['gh', 'api', f'repos/{org}/{repo}/issues/{epic_number}/sub_issues', '--paginate']
+        open_res = subprocess.run(base + ['--jq', open_filter], capture_output=True, text=True, timeout=20)
+        if open_res.returncode != 0:
+            return empty
+        closed_res = subprocess.run(base + ['--jq', closed_filter], capture_output=True, text=True, timeout=20)
+        latest_res = subprocess.run(base + ['--jq', latest_filter], capture_output=True, text=True, timeout=20)
+        total_res = subprocess.run(base + ['--jq', total_filter], capture_output=True, text=True, timeout=20)
+
+        # --paginate concatenates one result per page; sum the per-page ints.
+        def _sum_ints(text):
+            return sum(int(x) for x in text.split() if x.strip().lstrip('-').isdigit())
+
+        def _collect_numbers(text):
+            nums = set()
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    nums.update(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            return sorted(nums)
+
+        open_count = _sum_ints(open_res.stdout)
+        total = _sum_ints(total_res.stdout) if total_res.returncode == 0 else open_count
+        closed_numbers = _collect_numbers(closed_res.stdout) if closed_res.returncode == 0 else []
+        # max across pages: each page emits its own max line; take the overall max.
+        latest = ""
+        if latest_res.returncode == 0:
+            for line in latest_res.stdout.splitlines():
+                line = line.strip().strip('"')
+                if line and line > latest:
+                    latest = line
+        return {
+            'open': open_count,
+            'closed_recent': len(closed_numbers),
+            'closed_recent_numbers': closed_numbers,
+            'latest_closed_at': latest,
+            'total': total,
+        }
+    except (subprocess.TimeoutExpired, ValueError):
+        return empty
+
+
 PROJECT_NUMBER = 8  # "Kagenti Issue Prioritization" — the board clawgenti can access
 
 
@@ -229,22 +303,31 @@ def main():
         key_result = extract_key_result(epic.get('body', ''))
         updated_at = (epic.get('updatedAt') or '')[:10]
 
-        status = ""
+        board_status = ""
         if status_map and url in status_map:
-            status = status_map[url]
+            board_status = status_map[url]
 
+        # Primary signal: sub-issue activity (no read:project scope needed).
+        sub = get_sub_issue_activity(args.org, epic['repo'], epic['number'], since, until)
         activity = get_activity_via_timeline(args.org, epic['repo'], epic['number'], since, until)
-        has_activity = activity['prs_merged'] > 0
-        updated_in_period = updated_at >= since
 
-        if not fallback_mode and status_map:
-            is_tracked = status.lower() in ('in progress', 'in-progress', 'active', 'epics')
-            if not is_tracked and not has_activity:
-                continue
+        # An epic is active if it has open sub-issues (backlog / in-progress),
+        # a sub-issue closed this window, or a merged-PR cross-reference this
+        # window. Board Status is display-only enrichment — never a gate.
+        is_active = sub['open'] > 0 or sub['closed_recent'] > 0 or activity['prs_merged'] > 0
+        if not is_active:
+            continue
+
+        # Prefer the board's own label when present; otherwise derive from
+        # sub-issue state so the status column is still meaningful.
+        if board_status:
+            status = board_status
+        elif sub['closed_recent'] > 0:
+            status = "Active"
+        elif sub['open'] > 0:
+            status = "In progress"
         else:
-            if not updated_in_period and not has_activity:
-                continue
-            status = "Active" if has_activity else "Updated"
+            status = "Updated"
 
         results.append({
             'number': epic['number'],
@@ -257,11 +340,19 @@ def main():
             'status': status,
             'key_result': key_result,
             'activity_this_week': activity,
+            'sub_issues': sub,
             'updated_at': updated_at,
             'labels': labels,
         })
 
+    # Rank by RECENCY, not volume: any epic with a sub-issue closed this window
+    # ranks above those with none (by freshest closure), so a single bulk-close
+    # epic cannot crowd out low-volume but freshly-active epics. Among epics with
+    # no recent closure, those with open sub-issues rank next, then by update.
     results.sort(key=lambda e: (
+        1 if e['sub_issues']['latest_closed_at'] else 0,
+        e['sub_issues']['latest_closed_at'],
+        1 if e['sub_issues']['open'] else 0,
         e['activity_this_week']['prs_merged'],
         e['updated_at'],
     ), reverse=True)

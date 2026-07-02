@@ -37,6 +37,15 @@
       "skills": [
         "./skills/automation-health-dashboard"
       ]
+    },
+    {
+      "name": "github-weekly-report",
+      "description": "Generate comprehensive weekly GitHub org activity reports with active-epic tracking",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/github-weekly-report"
+      ]
     }
   ]
 }
