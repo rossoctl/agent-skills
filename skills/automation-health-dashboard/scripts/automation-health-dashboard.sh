@@ -78,6 +78,7 @@ fi
 
 LINK_SCAN_DIR="$REPORTS_DIR/link-scan"
 DEP_BUMP_DIR="$REPORTS_DIR/dep-bump"
+PR_REVIEW_DIR="$REPORTS_DIR/pr-review"
 
 HAS_LINK_HEALTH=false
 HAS_DEP_BUMP=false
@@ -89,15 +90,21 @@ if [ -f "$DEP_BUMP_DIR/latest.json" ] && [ -f "$DEP_BUMP_DIR/history.json" ]; th
   HAS_DEP_BUMP=true
 fi
 
-if [ "$HAS_LINK_HEALTH" = false ] && [ "$HAS_DEP_BUMP" = false ]; then
+HAS_PR_REVIEW=false
+if [ -f "$PR_REVIEW_DIR/fixer-history.json" ]; then
+  HAS_PR_REVIEW=true
+fi
+
+if [ "$HAS_LINK_HEALTH" = false ] && [ "$HAS_DEP_BUMP" = false ] && [ "$HAS_PR_REVIEW" = false ]; then
   echo "ERROR: No program reports found in $REPORTS_DIR"
-  echo "Expected: $LINK_SCAN_DIR/latest.json and/or $DEP_BUMP_DIR/latest.json"
+  echo "Expected one of: $LINK_SCAN_DIR/latest.json, $DEP_BUMP_DIR/latest.json, $PR_REVIEW_DIR/fixer-history.json"
   exit 1
 fi
 
 PROGRAMS_ACTIVE=0
 if [ "$HAS_LINK_HEALTH" = true ]; then PROGRAMS_ACTIVE=$((PROGRAMS_ACTIVE + 1)); fi
 if [ "$HAS_DEP_BUMP" = true ]; then PROGRAMS_ACTIVE=$((PROGRAMS_ACTIVE + 1)); fi
+if [ "$HAS_PR_REVIEW" = true ]; then PROGRAMS_ACTIVE=$((PROGRAMS_ACTIVE + 1)); fi
 
 # --- Setup ---
 TMPDIR=$(mktemp -d)
@@ -178,6 +185,8 @@ LH_BROKEN_EXTERNAL=0
 LH_FIRST_INTERNAL=0
 LH_FIRST_EXTERNAL=0
 LH_TREND_TABLE="| - | - | - | - |"
+lh_int_trend=""
+lh_ext_trend=""
 
 if [ "$HAS_LINK_HEALTH" = true ]; then
   LH_REPOS_SCANNED=$(jq '.repos_scanned // 0' "$LINK_SCAN_DIR/latest.json")
@@ -276,6 +285,59 @@ if [ "$HAS_DEP_BUMP" = true ]; then
 fi
 
 # =============================================================================
+# Step 4b: Compute PR-review section
+# =============================================================================
+
+PR_REVIEWS_TOTAL=0
+PR_REVIEWS_FAILED=0
+PR_QUEUE_NOW=0
+PR_TTM_REVIEWED="N/A"
+PR_TTM_UNREVIEWED="N/A"
+PR_TTM_BEFORE="N/A"
+PR_TTM_AFTER="N/A"
+PR_ACTIVATIONS_NOTE="n/a"
+PR_TREND_TABLE="| - | - | - | - |"
+
+if [ "$HAS_PR_REVIEW" = true ]; then
+  PR_REVIEWS_TOTAL=$(jq '[.[] | .prs_reviewed // 0] | add // 0' "$PR_REVIEW_DIR/fixer-history.json")
+  PR_REVIEWS_FAILED=$(jq '[.[] | .prs_failed // 0] | add // 0' "$PR_REVIEW_DIR/fixer-history.json")
+
+  if [ -f "$PR_REVIEW_DIR/latest.json" ]; then
+    PR_QUEUE_NOW=$(jq '.eligible_prs | length' "$PR_REVIEW_DIR/latest.json" 2>/dev/null || echo "0")
+  fi
+
+  if [ -f "$PR_REVIEW_DIR/impact.json" ]; then
+    PR_TTM_REVIEWED=$(jq '.reviewed.median_ttm_hours // "N/A"'           "$PR_REVIEW_DIR/impact.json")
+    PR_TTM_UNREVIEWED=$(jq '.unreviewed.median_ttm_hours // "N/A"'        "$PR_REVIEW_DIR/impact.json")
+    PR_TTM_BEFORE=$(jq '.before_activation.median_ttm_hours // "N/A"'    "$PR_REVIEW_DIR/impact.json")
+    PR_TTM_AFTER=$(jq '.after_activation.median_ttm_hours // "N/A"'      "$PR_REVIEW_DIR/impact.json")
+    # Per-repo activation summary, e.g. "kagenti/kagenti since 2026-06-13; ..."
+    PR_ACTIVATIONS_NOTE=$(jq -r '
+      (.activations // []) |
+      if length == 0 then "n/a"
+      else [.[] | "\(.repo) since \(.activation | split("T")[0])"] | join("; ")
+      end' "$PR_REVIEW_DIR/impact.json" 2>/dev/null || echo "n/a")
+  fi
+
+  # Trend: last 10 fixer runs (reviewed / processed / failed)
+  # Date + time (UTC, to the minute) so multiple runs on the same day stay distinct.
+  PR_TREND_TABLE=$(jq -r '
+    .[-10:] | reverse | .[] |
+    "| \(.date[0:16] | sub("T";" ")) | \(.prs_reviewed // 0) | \(.prs_processed // 0) | \(.prs_failed // 0) |"
+  ' "$PR_REVIEW_DIR/fixer-history.json" 2>/dev/null || echo "| - | - | - | - |")
+
+  if [ "$VERBOSE" = true ]; then
+    echo "PR-review metrics:"
+    echo "  Reviews (cumulative): $PR_REVIEWS_TOTAL (failed: $PR_REVIEWS_FAILED)"
+    echo "  Queue now: $PR_QUEUE_NOW"
+    echo "  TTM before/after activation: ${PR_TTM_BEFORE}h / ${PR_TTM_AFTER}h"
+    echo "  TTM reviewed/unreviewed: ${PR_TTM_REVIEWED}h / ${PR_TTM_UNREVIEWED}h"
+    echo "  Activations: $PR_ACTIVATIONS_NOTE"
+    echo ""
+  fi
+fi
+
+# =============================================================================
 # Step 5: Compute cross-program coverage
 # =============================================================================
 
@@ -287,6 +349,7 @@ TOTAL_UNIQUE_REPOS=0
 # Collect repos from each program
 lh_repos=""
 db_repos=""
+pr_repos=""
 
 if [ "$HAS_LINK_HEALTH" = true ]; then
   lh_repos=$(jq -r '[.broken[].repo] | unique | .[] | split("/")[1]' "$LINK_SCAN_DIR/latest.json" 2>/dev/null | sort -u || true)
@@ -299,14 +362,26 @@ if [ "$HAS_DEP_BUMP" = true ]; then
   db_repos=$(jq -r '([.stale_prs[].repo] + [.coverage_gaps[].repo]) | unique | .[]' "$DEP_BUMP_DIR/latest.json" 2>/dev/null | sort -u || true)
 fi
 
+if [ "$HAS_PR_REVIEW" = true ]; then
+  # Prefer per-repo activations from impact.json (short-name via split("/")[1]);
+  # fall back to the four configured repo short-names.
+  if [ -f "$PR_REVIEW_DIR/impact.json" ]; then
+    pr_repos=$(jq -r '[.activations[].repo] | unique | .[] | split("/")[1]' "$PR_REVIEW_DIR/impact.json" 2>/dev/null | sort -u || true)
+  fi
+  if [ -z "$pr_repos" ]; then
+    pr_repos=$(printf '%s\n' kagenti kagenti-extensions automation agent-skills | sort -u)
+  fi
+fi
+
 # Merge and produce table
-all_repos=$(printf '%s\n%s\n' "$lh_repos" "$db_repos" | sort -u | grep -v '^$' || true)
+all_repos=$(printf '%s\n%s\n%s\n' "$lh_repos" "$db_repos" "$pr_repos" | sort -u | grep -v '^$' || true)
 TOTAL_UNIQUE_REPOS=$(echo "$all_repos" | grep -c . || echo "0")
 
 while IFS= read -r repo; do
   [ -z "$repo" ] && continue
   has_lh="no"
   has_db="no"
+  has_pr="no"
   count=0
 
   if echo "$lh_repos" | grep -qxF "$repo"; then
@@ -317,8 +392,12 @@ while IFS= read -r repo; do
     has_db="yes"
     count=$((count + 1))
   fi
+  if echo "$pr_repos" | grep -qxF "$repo"; then
+    has_pr="yes"
+    count=$((count + 1))
+  fi
 
-  COVERAGE_TABLE="${COVERAGE_TABLE}| $repo | $has_lh | $has_db | $count |
+  COVERAGE_TABLE="${COVERAGE_TABLE}| $repo | $has_lh | $has_db | $has_pr | $count |
 "
   if [ "$count" -ge 1 ]; then REPOS_UNDER_ONE=$((REPOS_UNDER_ONE + 1)); fi
   if [ "$count" -ge "$PROGRAMS_ACTIVE" ]; then REPOS_UNDER_ALL=$((REPOS_UNDER_ALL + 1)); fi
@@ -339,7 +418,9 @@ fi
 CRON_TABLE="| link-health-scanner | Mon/Wed/Fri 7am ET | $LAST_SCAN_DATE | ok |
 | link-health-fixer | Tue/Thu 8am ET | $LAST_SCAN_DATE | ok |
 | dep-bump-scanner | Tue/Thu 10am ET | $LAST_SCAN_DATE | ok |
-| dep-bump-fixer | Tue/Thu 12pm ET | $LAST_SCAN_DATE | ok |"
+| dep-bump-fixer | Tue/Thu 12pm ET | $LAST_SCAN_DATE | ok |
+| pr-review-scanner | every ~15 min | $LAST_SCAN_DATE | ok |
+| pr-review-fixer | every ~15 min | $LAST_SCAN_DATE | ok |"
 
 # =============================================================================
 # Step 7: Generate markdown
@@ -358,6 +439,7 @@ cat > "$TMPDIR/automation-health.md" << DASHBOARD_EOF
 | Total issues auto-resolved | $TOTAL_ISSUES_RESOLVED |
 | Total PRs auto-opened | $TOTAL_PRS_OPENED |
 | Estimated hours saved | ${HOURS_SAVED} hrs (at 15 min/resolved issue) |
+| PRs reviewed by clawgenti | $PR_REVIEWS_TOTAL |
 | Programs active | $PROGRAMS_ACTIVE |
 | Last successful scan | $LAST_SCAN_DATE |
 
@@ -401,10 +483,38 @@ $DB_TIER_TABLE
 |------|----------------|---------------|-------|
 $DB_TREND_TABLE
 
+## PR Review Bot
+
+Headline impact — median time-to-merge before vs. after the bot became active in each repo:
+
+| Metric | Value | Note |
+|--------|-------|------|
+| Median TTM — before activation | ${PR_TTM_BEFORE}h | per repo, PRs opened before its first bot review |
+| Median TTM — after activation | ${PR_TTM_AFTER}h | per repo, PRs opened on/after its first bot review |
+| PRs reviewed (cumulative) | $PR_REVIEWS_TOTAL | failed: $PR_REVIEWS_FAILED |
+| Currently queued for review | $PR_QUEUE_NOW | |
+
+> Per-repo activation: $PR_ACTIVATIONS_NOTE
+
+Reviewed vs. unreviewed (secondary — interpret with care):
+
+| Metric | Value | Note |
+|--------|-------|------|
+| Median TTM — reviewed | ${PR_TTM_REVIEWED}h | PRs clawgenti reviewed |
+| Median TTM — unreviewed | ${PR_TTM_UNREVIEWED}h | PRs without a bot review |
+
+> Reviewed PRs are self-selected: \`ready-for-ai-review\` is applied to substantive PRs, so a *higher* reviewed TTM reflects which PRs get reviewed, not the bot slowing merges. Use the before/after rows above for impact.
+
+### Review Activity (last 10 runs)
+
+| Date (UTC) | Reviewed | Processed | Failed |
+|------------|----------|-----------|--------|
+$PR_TREND_TABLE
+
 ## Cross-Program Coverage
 
-| Repo | Link Health | Dep Bump | Programs |
-|------|-------------|----------|----------|
+| Repo | Link Health | Dep Bump | PR Review | Programs |
+|------|-------------|----------|-----------|----------|
 $COVERAGE_TABLE
 
 ### Coverage Summary
