@@ -179,7 +179,7 @@ def render_active_epics_section(data):
         return lines
 
     if data.get('fallback_mode'):
-        lines.append("*Note: Using activity-based detection (Projects v2 status unavailable).*")
+        lines.append("*Note: Projects v2 status unavailable; the Status column is derived from sub-issue state.*")
         lines.append("")
 
     lines.append("| Epic | Lead | Key Result | This Week |")
@@ -190,8 +190,15 @@ def render_active_epics_section(data):
         title_short = title_clean[:50] + '...' if len(title_clean) > 53 else title_clean
         lead = f"@{e['lead']}" if e['lead'] else "unassigned"
         kr = e.get('key_result', '') or "—"
+        # Sub-issue activity is the primary signal; PRs merged is supplementary.
+        sub = e.get('sub_issues', {})
         act = e.get('activity_this_week', {})
         parts = []
+        if sub.get('closed_recent'):
+            n = sub['closed_recent']
+            parts.append(f"{n} sub-issue{'s' if n != 1 else ''} closed")
+        if sub.get('open'):
+            parts.append(f"{sub['open']} open")
         if act.get('prs_merged'):
             parts.append(f"{act['prs_merged']} PR{'s' if act['prs_merged'] != 1 else ''} merged")
         if act.get('issues_closed'):
