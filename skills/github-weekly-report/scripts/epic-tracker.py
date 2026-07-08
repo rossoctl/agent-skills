@@ -127,8 +127,11 @@ def get_sub_issue_activity(org, repo, epic_number, since, until):
     sub-issue (backlog / in-progress) or any sub-issue closed within
     [since, until] inclusive.
 
-    Server-side --jq is required: raw sub-issue bodies contain control chars
-    that break client-side json parsing (same reason as elsewhere in this file).
+    Fetches the sub_issues endpoint once (a single --paginate call) projecting
+    only the three fields we need into one compact object per line, then filters
+    locally. Projecting server-side keeps us safe from control chars in raw
+    sub-issue bodies (which break client-side json parsing) while avoiding the
+    4x API cost — and mid-run snapshot skew — of separate calls per metric.
     Returns {open, closed_recent, closed_recent_numbers, latest_closed_at, total}.
     latest_closed_at is the most recent in-window closure timestamp ("" if none)
     — used for recency-based ranking so a single bulk-close epic does not crowd
@@ -136,56 +139,46 @@ def get_sub_issue_activity(org, repo, epic_number, since, until):
     """
     until_end = f"{until}T23:59:59Z"
     since_start = f"{since}T00:00:00Z"
-    in_window = (
-        f'select((.closed_at // "") >= "{since_start}" and (.closed_at // "") <= "{until_end}")'
-    )
-    open_filter = '[.[] | select(.state == "open")] | length'
-    closed_filter = f'[.[] | select(.state == "closed") | {in_window} | .number]'
-    latest_filter = f'[.[] | select(.state == "closed") | {in_window} | .closed_at] | max // ""'
-    total_filter = 'length'
     empty = {'open': 0, 'closed_recent': 0, 'closed_recent_numbers': [],
              'latest_closed_at': '', 'total': 0}
     try:
-        base = ['gh', 'api', f'repos/{org}/{repo}/issues/{epic_number}/sub_issues', '--paginate']
-        open_res = subprocess.run(base + ['--jq', open_filter], capture_output=True, text=True, timeout=20)
-        if open_res.returncode != 0:
+        result = subprocess.run(
+            ['gh', 'api', f'repos/{org}/{repo}/issues/{epic_number}/sub_issues',
+             '--paginate', '--jq', '.[] | {number, state, closed_at}'],
+            capture_output=True, text=True, timeout=20
+        )
+        if result.returncode != 0:
             return empty
-        closed_res = subprocess.run(base + ['--jq', closed_filter], capture_output=True, text=True, timeout=20)
-        latest_res = subprocess.run(base + ['--jq', latest_filter], capture_output=True, text=True, timeout=20)
-        total_res = subprocess.run(base + ['--jq', total_filter], capture_output=True, text=True, timeout=20)
 
-        # --paginate concatenates one result per page; sum the per-page ints.
-        def _sum_ints(text):
-            return sum(int(x) for x in text.split() if x.strip().lstrip('-').isdigit())
+        # One compact JSON object per line (NDJSON across all pages).
+        rows = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
 
-        def _collect_numbers(text):
-            nums = set()
-            for line in text.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    nums.update(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-            return sorted(nums)
+        # closed_at is an ISO-8601 UTC timestamp (fixed-width, Z-suffixed), so a
+        # plain string range check is a correct in-window test. A null/missing
+        # closed_at ("") is lexically below since_start and thus excluded.
+        def closed_in_window(row):
+            if row.get('state') != 'closed':
+                return False
+            ts = row.get('closed_at') or ''
+            return since_start <= ts <= until_end
 
-        open_count = _sum_ints(open_res.stdout)
-        total = _sum_ints(total_res.stdout) if total_res.returncode == 0 else open_count
-        closed_numbers = _collect_numbers(closed_res.stdout) if closed_res.returncode == 0 else []
-        # max across pages: each page emits its own max line; take the overall max.
-        latest = ""
-        if latest_res.returncode == 0:
-            for line in latest_res.stdout.splitlines():
-                line = line.strip().strip('"')
-                if line and line > latest:
-                    latest = line
+        open_count = sum(1 for r in rows if r.get('state') == 'open')
+        closed_numbers = sorted({r['number'] for r in rows if closed_in_window(r)})
+        latest = max((r['closed_at'] for r in rows if closed_in_window(r)), default='')
         return {
             'open': open_count,
             'closed_recent': len(closed_numbers),
             'closed_recent_numbers': closed_numbers,
             'latest_closed_at': latest,
-            'total': total,
+            'total': len(rows),
         }
     except (subprocess.TimeoutExpired, ValueError):
         return empty
