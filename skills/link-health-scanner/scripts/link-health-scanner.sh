@@ -146,7 +146,10 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
     .key as $filepath |
     .value[] |
     select(.url | test("^https?://")) |
-    # Suppress unreachable-by-design hostnames at URL level
+    # Suppress unreachable-by-design hostnames at URL level.
+    # Bare .svc covers both plain cluster-local service names (foo.ns.svc) and
+    # the fully-qualified foo.ns.svc.cluster.local form.
+    select(.url | test("://[^/]*\\.svc([:/]|$)") | not) |
     select(.url | test("://[^/]*\\.svc\\.cluster\\.local([:/]|$)") | not) |
     select(.url | test("://[^/]*\\.local([:/]|$)") | not) |
     select(.url | test("://(10\\.[0-9]|172\\.(1[6-9]|2[0-9]|3[01])\\.[0-9]|192\\.168\\.[0-9])[0-9.]*([:/]|$)") | not) |
