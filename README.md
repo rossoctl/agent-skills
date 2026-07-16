@@ -14,6 +14,7 @@ Built to the [Agent Skills specification](https://agentskills.io/specification).
 | [dep-bump-fixer](skills/dep-bump-fixer/) | Analyze stale Dependabot PRs and post commentary to accelerate review |
 | [automation-health-dashboard](skills/automation-health-dashboard/) | Generate executive-facing dashboard combining all program metrics |
 | [github-weekly-report](skills/github-weekly-report/) | Generate weekly org activity reports with merged PRs, CI health, and active-epic tracking |
+| [github-pr-review](skills/github-pr-review/) | Automated PR review: conventions, security, CI status, inline comments |
 
 ## Installation
 

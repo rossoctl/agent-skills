@@ -46,6 +46,15 @@
       "skills": [
         "./skills/github-weekly-report"
       ]
+    },
+    {
+      "name": "github-pr-review",
+      "description": "Automated PR review — conventions, security, CI status, inline comments",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/github-pr-review"
+      ]
     }
   ]
 }
