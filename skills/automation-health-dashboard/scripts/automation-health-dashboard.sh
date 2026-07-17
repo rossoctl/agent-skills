@@ -359,7 +359,7 @@ fi
 
 if [ "$HAS_DEP_BUMP" = true ]; then
   # Repos with dependabot activity
-  db_repos=$(jq -r '([.stale_prs[].repo] + [.coverage_gaps[].repo]) | unique | .[]' "$DEP_BUMP_DIR/latest.json" 2>/dev/null | sort -u || true)
+  db_repos=$(jq -r '([.stale_prs[].repo] + [.coverage_gaps[].repo]) | unique | .[] | split("/")[1]' "$DEP_BUMP_DIR/latest.json" 2>/dev/null | sort -u || true)
 fi
 
 if [ "$HAS_PR_REVIEW" = true ]; then
