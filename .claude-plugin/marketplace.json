@@ -1,8 +1,8 @@
 {
-  "name": "kagenti-agent-skills",
+  "name": "rossoctl-agent-skills",
   "owner": {
-    "name": "kagenti",
-    "email": "admin@kagenti.org"
+    "name": "rossoctl",
+    "email": "rosso@rossoctl.dev"
   },
   "metadata": {
     "description": "Automation skills for GitHub org maintenance",
