@@ -1,4 +1,4 @@
-# kagenti Agent Skills
+# rossoctl Agent Skills
 
 Agent Skills for automated maintenance of GitHub organizations. Each skill teaches an AI agent how to perform a specific task using shell scripts and structured instructions.
 
@@ -21,8 +21,8 @@ Built to the [Agent Skills specification](https://agentskills.io/specification).
 ### Claude Code (plugin marketplace)
 
 ```
-/plugin marketplace add kagenti/agent-skills
-/plugin install link-health@kagenti-agent-skills
+/plugin marketplace add rossoctl/agent-skills
+/plugin install link-health@rossoctl-agent-skills
 ```
 
 ### Manual
