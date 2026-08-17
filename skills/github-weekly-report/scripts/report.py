@@ -29,6 +29,21 @@ def run_gh(args):
 
 def get_repos(org):
     return run_gh(['repo', 'list', org, '--limit', '100', '--json', 'name'])
+
+def normalize_repo_args(repo_args):
+    """Turn owner-qualified --repos values into the bare-name dicts get_repos
+    returns. 'rossoctl/operator' -> {'name': 'operator'}. A bare 'operator'
+    (no slash) is accepted as-is. Order and duplicates are preserved as given.
+    """
+    names = []
+    for item in repo_args:
+        item = item.strip()
+        if not item:
+            continue
+        _, _, name = item.rpartition('/')
+        names.append({'name': name or item})
+    return names
+
 def get_merged_prs(org, repo, since, until):
     return run_gh(['pr', 'list', '-R', f'{org}/{repo}', '--search', f'merged:{since}..{until}', '--state', 'merged', '--limit', '500', '--json', 'number,title,author,mergedAt'])
 def get_open_prs(org, repo):
@@ -209,9 +224,9 @@ def render_active_epics_section(data):
     lines.append("")
     return lines
 
-def generate_report(org, since, until, enhanced=False):
+def generate_report(org, since, until, enhanced=False, repos=None):
     lines = [f"# Org Weekly Report: {since} -- {until}", "", f"*Generated for [{org}](https://github.com/{org})*", ""]
-    repos = get_repos(org)
+    repos = repos if repos is not None else get_repos(org)
     repos_data = []
     for repo in repos:
         name = repo['name']
@@ -465,11 +480,14 @@ def main():
     p.add_argument('--output')
     p.add_argument('--json-output', metavar='PATH', help='Write structured JSON data for AI synthesis')
     p.add_argument('--enhanced', action='store_true', help='Include additional metrics (reserved for future use)')
+    p.add_argument('--repos', nargs='+', metavar='OWNER/REPO',
+                   help='Explicit owner-qualified repo list; when set, skips org-wide discovery')
     args = p.parse_args()
     since = args.since or (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
     until = args.until or datetime.now().strftime('%Y-%m-%d')
 
-    report, repos_data, epic_data = generate_report(args.org, since, until, args.enhanced)
+    repos = normalize_repo_args(args.repos) if args.repos else None
+    report, repos_data, epic_data = generate_report(args.org, since, until, args.enhanced, repos=repos)
 
     if args.output:
         with open(args.output, 'w') as f:
