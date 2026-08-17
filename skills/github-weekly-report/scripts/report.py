@@ -155,7 +155,7 @@ def generate_action_items(repos_data):
     lines.append("")
     return lines
 
-def run_epic_tracker(org, since, until):
+def run_epic_tracker(org, since, until, repos=None):
     """Run epic-tracker.py once and return its parsed JSON.
 
     Returns a dict on success, or a dict with an 'error' key describing why
@@ -168,10 +168,10 @@ def run_epic_tracker(org, since, until):
         return {'error': 'Epic tracker not available.'}
 
     try:
-        result = subprocess.run(
-            [sys.executable, tracker, '--org', org, '--since', since, '--until', until],
-            capture_output=True, text=True, timeout=120
-        )
+        cmd = [sys.executable, tracker, '--org', org, '--since', since, '--until', until]
+        if repos:
+            cmd += ['--repos', *[r['name'] for r in repos]]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
             if result.stderr:
                 print(f"epic-tracker stderr: {result.stderr}", file=sys.stderr)
@@ -313,7 +313,7 @@ def generate_report(org, since, until, enhanced=False, repos=None):
         lines.append("")
 
     # Active Epics — run the tracker once and reuse for both markdown and JSON
-    epic_data = run_epic_tracker(org, since, until)
+    epic_data = run_epic_tracker(org, since, until, repos=repos)
     lines += render_active_epics_section(epic_data)
     lines.append("")
 
