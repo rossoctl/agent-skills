@@ -225,7 +225,14 @@ def render_active_epics_section(data):
     return lines
 
 def generate_report(org, since, until, enhanced=False, repos=None):
-    lines = [f"# Org Weekly Report: {since} -- {until}", "", f"*Generated for [{org}](https://github.com/{org})*", ""]
+    lines = [
+        f"# Org Weekly Report: {since} -- {until}",
+        "",
+        f"*Generated for [{org}](https://github.com/{org}) by the "
+        "[github-weekly-report](https://github.com/rossoctl/agent-skills/tree/main/skills/github-weekly-report) "
+        "skill.*",
+        "",
+    ]
     repos = repos if repos is not None else get_repos(org)
     repos_data = []
     for repo in repos:
