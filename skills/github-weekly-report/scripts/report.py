@@ -30,18 +30,35 @@ def run_gh(args):
 def get_repos(org):
     return run_gh(['repo', 'list', org, '--limit', '100', '--json', 'name'])
 
-def normalize_repo_args(repo_args):
-    """Turn owner-qualified --repos values into the bare-name dicts get_repos
-    returns. 'rossoctl/operator' -> {'name': 'operator'}. A bare 'operator'
-    (no slash) is accepted as-is. Order and duplicates are preserved as given.
+def normalize_repo_args(repo_args, org):
+    """Turn --repos values into the bare-name dicts get_repos returns, scoped to
+    a single owner. Accepts a bare name ('operator') or an owner-qualified name
+    whose owner matches --org ('rossoctl/operator'); both yield {'name': 'operator'}.
+
+    Every downstream fetch rebuilds the slug as f'{org}/{name}', so an entry whose
+    owner differs from --org would be silently reported against the wrong owner.
+    To keep the report header and the queried data consistent, reject any entry
+    that is owner-qualified with a different owner, or that is malformed (empty,
+    or more than one '/'). Order and duplicates are preserved as given.
     """
     names = []
     for item in repo_args:
         item = item.strip()
         if not item:
             continue
-        _, _, name = item.rpartition('/')
-        names.append({'name': name or item})
+        parts = item.split('/')
+        if len(parts) == 1:
+            name = parts[0]
+        elif len(parts) == 2 and parts[0] and parts[1]:
+            owner, name = parts
+            if owner != org:
+                sys.exit(
+                    f"--repos entry '{item}' is not in --org '{org}'. "
+                    f"Entries must be a bare repo name or '{org}/<repo>'."
+                )
+        else:
+            sys.exit(f"--repos entry '{item}' is malformed; expected '<repo>' or '{org}/<repo>'.")
+        names.append({'name': name})
     return names
 
 def get_merged_prs(org, repo, since, until):
@@ -487,13 +504,14 @@ def main():
     p.add_argument('--output')
     p.add_argument('--json-output', metavar='PATH', help='Write structured JSON data for AI synthesis')
     p.add_argument('--enhanced', action='store_true', help='Include additional metrics (reserved for future use)')
-    p.add_argument('--repos', nargs='+', metavar='OWNER/REPO',
-                   help='Explicit owner-qualified repo list; when set, skips org-wide discovery')
+    p.add_argument('--repos', nargs='+', metavar='REPO',
+                   help="Explicit repo list scoped to --org (bare '<repo>' or "
+                        "'<org>/<repo>'); when set, skips org-wide discovery")
     args = p.parse_args()
     since = args.since or (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
     until = args.until or datetime.now().strftime('%Y-%m-%d')
 
-    repos = normalize_repo_args(args.repos) if args.repos else None
+    repos = normalize_repo_args(args.repos, args.org) if args.repos else None
     report, repos_data, epic_data = generate_report(args.org, since, until, args.enhanced, repos=repos)
 
     if args.output:
