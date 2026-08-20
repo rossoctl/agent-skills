@@ -29,6 +29,38 @@ def run_gh(args):
 
 def get_repos(org):
     return run_gh(['repo', 'list', org, '--limit', '100', '--json', 'name'])
+
+def normalize_repo_args(repo_args, org):
+    """Turn --repos values into the bare-name dicts get_repos returns, scoped to
+    a single owner. Accepts a bare name ('operator') or an owner-qualified name
+    whose owner matches --org ('rossoctl/operator'); both yield {'name': 'operator'}.
+
+    Every downstream fetch rebuilds the slug as f'{org}/{name}', so an entry whose
+    owner differs from --org would be silently reported against the wrong owner.
+    To keep the report header and the queried data consistent, reject any entry
+    that is owner-qualified with a different owner, or that is malformed (empty,
+    or more than one '/'). Order and duplicates are preserved as given.
+    """
+    names = []
+    for item in repo_args:
+        item = item.strip()
+        if not item:
+            continue
+        parts = item.split('/')
+        if len(parts) == 1:
+            name = parts[0]
+        elif len(parts) == 2 and parts[0] and parts[1]:
+            owner, name = parts
+            if owner != org:
+                sys.exit(
+                    f"--repos entry '{item}' is not in --org '{org}'. "
+                    f"Entries must be a bare repo name or '{org}/<repo>'."
+                )
+        else:
+            sys.exit(f"--repos entry '{item}' is malformed; expected '<repo>' or '{org}/<repo>'.")
+        names.append({'name': name})
+    return names
+
 def get_merged_prs(org, repo, since, until):
     return run_gh(['pr', 'list', '-R', f'{org}/{repo}', '--search', f'merged:{since}..{until}', '--state', 'merged', '--limit', '500', '--json', 'number,title,author,mergedAt'])
 def get_open_prs(org, repo):
@@ -140,7 +172,7 @@ def generate_action_items(repos_data):
     lines.append("")
     return lines
 
-def run_epic_tracker(org, since, until):
+def run_epic_tracker(org, since, until, repos=None):
     """Run epic-tracker.py once and return its parsed JSON.
 
     Returns a dict on success, or a dict with an 'error' key describing why
@@ -153,10 +185,10 @@ def run_epic_tracker(org, since, until):
         return {'error': 'Epic tracker not available.'}
 
     try:
-        result = subprocess.run(
-            [sys.executable, tracker, '--org', org, '--since', since, '--until', until],
-            capture_output=True, text=True, timeout=120
-        )
+        cmd = [sys.executable, tracker, '--org', org, '--since', since, '--until', until]
+        if repos:
+            cmd += ['--repos', *[r['name'] for r in repos]]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
             if result.stderr:
                 print(f"epic-tracker stderr: {result.stderr}", file=sys.stderr)
@@ -209,9 +241,16 @@ def render_active_epics_section(data):
     lines.append("")
     return lines
 
-def generate_report(org, since, until, enhanced=False):
-    lines = [f"# Org Weekly Report: {since} -- {until}", "", f"*Generated for [{org}](https://github.com/{org})*", ""]
-    repos = get_repos(org)
+def generate_report(org, since, until, enhanced=False, repos=None):
+    lines = [
+        f"# Org Weekly Report: {since} -- {until}",
+        "",
+        f"*Generated for [{org}](https://github.com/{org}) by the "
+        "[github-weekly-report](https://github.com/rossoctl/agent-skills/tree/main/skills/github-weekly-report) "
+        "skill.*",
+        "",
+    ]
+    repos = repos if repos is not None else get_repos(org)
     repos_data = []
     for repo in repos:
         name = repo['name']
@@ -298,7 +337,7 @@ def generate_report(org, since, until, enhanced=False):
         lines.append("")
 
     # Active Epics — run the tracker once and reuse for both markdown and JSON
-    epic_data = run_epic_tracker(org, since, until)
+    epic_data = run_epic_tracker(org, since, until, repos=repos)
     lines += render_active_epics_section(epic_data)
     lines.append("")
 
@@ -465,11 +504,15 @@ def main():
     p.add_argument('--output')
     p.add_argument('--json-output', metavar='PATH', help='Write structured JSON data for AI synthesis')
     p.add_argument('--enhanced', action='store_true', help='Include additional metrics (reserved for future use)')
+    p.add_argument('--repos', nargs='+', metavar='REPO',
+                   help="Explicit repo list scoped to --org (bare '<repo>' or "
+                        "'<org>/<repo>'); when set, skips org-wide discovery")
     args = p.parse_args()
     since = args.since or (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
     until = args.until or datetime.now().strftime('%Y-%m-%d')
 
-    report, repos_data, epic_data = generate_report(args.org, since, until, args.enhanced)
+    repos = normalize_repo_args(args.repos, args.org) if args.repos else None
+    report, repos_data, epic_data = generate_report(args.org, since, until, args.enhanced, repos=repos)
 
     if args.output:
         with open(args.output, 'w') as f:

@@ -258,13 +258,19 @@ def main():
     p.add_argument('--until', help='End of reporting period (YYYY-MM-DD)')
     p.add_argument('--max-epics', type=int, default=10, help='Maximum epics to include')
     p.add_argument('--skip-projects', action='store_true', help='Skip GitHub Projects v2 query')
+    p.add_argument('--repos', nargs='+', metavar='OWNER/REPO',
+                   help='Explicit owner-qualified repo list; when set, skips org-wide discovery')
     args = p.parse_args()
 
     since = args.since or (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
     until = args.until or datetime.now().strftime('%Y-%m-%d')
 
-    print(f"Fetching repos for {args.org}...", file=sys.stderr)
-    repos = get_org_repos(args.org)
+    if args.repos:
+        # Owner-qualified -> bare names; get_epics builds 'org/repo' from --org.
+        repos = [item.rpartition('/')[2] or item for item in args.repos]
+    else:
+        print(f"Fetching repos for {args.org}...", file=sys.stderr)
+        repos = get_org_repos(args.org)
     if not repos:
         print("Error: no repos found", file=sys.stderr)
         json.dump({'epics': [], 'fallback_mode': True, 'period': {'since': since, 'until': until}}, sys.stdout, indent=2)
