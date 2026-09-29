@@ -64,6 +64,21 @@
       "skills": [
         "./skills/byo-rossoctl-cortex"
       ]
+    },
+    {
+      "name": "hypershift",
+      "description": "Full HyperShift (hosted OpenShift on AWS) cluster lifecycle: setup, preflight, quotas, create/destroy, debug, and TTL-based cleanup",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/hypershift",
+        "./skills/hypershift-setup",
+        "./skills/hypershift-preflight",
+        "./skills/hypershift-quotas",
+        "./skills/hypershift-cluster",
+        "./skills/hypershift-debug",
+        "./skills/hypershift-cleanup"
+      ]
     }
   ]
 }

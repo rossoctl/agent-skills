@@ -16,6 +16,7 @@ Built to the [Agent Skills specification](https://agentskills.io/specification).
 | [github-weekly-report](skills/github-weekly-report/) | Generate weekly org activity reports with merged PRs, CI health, and active-epic tracking |
 | [github-pr-review](skills/github-pr-review/) | Automated PR review: conventions, security, CI status, inline comments |
 | [byo-rossoctl-cortex](skills/byo-rossoctl-cortex/) | Bring up a local rossoctl cortex (AuthBridge plugin pipeline) to host an agent; per-agent LiteLLM budget tracking isolated by env var |
+| [hypershift](skills/hypershift/) | Full HyperShift (hosted OpenShift on AWS) cluster lifecycle across 7 skills — setup, preflight, quotas, create/destroy, debug, TTL-based cleanup; also needs `aws`, `oc`, `ansible` |
 
 ## Installation
 
