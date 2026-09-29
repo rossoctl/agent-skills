@@ -194,6 +194,7 @@ if [ "${SKIP_ANSIBLE:-false}" != "true" ]; then
     if oc get hostedcluster -n clusters "$CLUSTER_NAME" &>/dev/null; then
         log_info "Destroying cluster '$CLUSTER_NAME' via ansible..."
 
+        _prev_dir="$PWD"
         cd "$HYPERSHIFT_AUTOMATION_DIR"
 
         ansible-playbook site.yml \
@@ -201,7 +202,7 @@ if [ "${SKIP_ANSIBLE:-false}" != "true" ]; then
             -e '{"iam": {"hcp_role_name": "'"$HCP_ROLE_NAME"'"}}' \
             -e '{"clusters": [{"name": "'"$CLUSTER_NAME"'", "region": "'"$AWS_REGION"'"}]}' || true
 
-        cd "$REPO_ROOT"
+        cd "$_prev_dir"
 
         # Post-ansible check for stuck finalizers
         HC_EXISTS=$(oc get hostedcluster -n clusters "$CLUSTER_NAME" -o name 2>/dev/null || echo "")
@@ -251,6 +252,7 @@ log_info "Checking for orphaned AWS resources..."
 if ! "$SCRIPT_DIR/debug-aws-hypershift.sh" --check "$CLUSTER_NAME"; then
     log_info "Orphaned AWS resources detected, running forced cleanup..."
 
+    _prev_dir="$PWD"
     cd "$HYPERSHIFT_AUTOMATION_DIR"
 
     # Use cluster_exists=true to force ansible to run AWS cleanup
@@ -260,7 +262,7 @@ if ! "$SCRIPT_DIR/debug-aws-hypershift.sh" --check "$CLUSTER_NAME"; then
         -e '{"iam": {"hcp_role_name": "'"$HCP_ROLE_NAME"'"}}' \
         -e '{"clusters": [{"name": "'"$CLUSTER_NAME"'", "region": "'"$AWS_REGION"'"}]}' || true
 
-    cd "$REPO_ROOT"
+    cd "$_prev_dir"
 
     # Verify cleanup
     if "$SCRIPT_DIR/debug-aws-hypershift.sh" --check "$CLUSTER_NAME"; then

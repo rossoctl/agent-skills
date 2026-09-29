@@ -1,4 +1,6 @@
-# Archived from rossoctl/rossoctl (preserved verbatim, not active here).
+# Adapted from rossoctl/rossoctl (not active here). One deliberate change from the
+# original: AWS credentials are scoped per-step via `env:` on the cleanup-script
+# steps instead of being re-exported into $GITHUB_ENV for the whole job.
 # To restore this scheduled cleanup in a repo, see
 # ../reference/reactivate-scheduled-cleanup.md.
 name: Cleanup Stale HyperShift Clusters
