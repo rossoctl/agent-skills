@@ -64,6 +64,15 @@
       "skills": [
         "./skills/byo-rossoctl-cortex"
       ]
+    },
+    {
+      "name": "repo-sync",
+      "description": "Keep local clones of the enrolled repos current by cloning missing ones and fast-forward pulling the rest, read-only toward GitHub",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/repo-sync"
+      ]
     }
   ]
 }
