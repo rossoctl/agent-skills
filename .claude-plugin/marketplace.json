@@ -66,6 +66,12 @@
       ]
     },
     {
+      "name": "repo-sync",
+      "description": "Keep local clones of the enrolled repos current by cloning missing ones and fast-forward pulling the rest, read-only toward GitHub",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/repo-sync"
       "name": "hypershift",
       "description": "Full HyperShift (hosted OpenShift on AWS) cluster lifecycle: setup, preflight, quotas, create/destroy, debug, and TTL-based cleanup",
       "source": "./",
