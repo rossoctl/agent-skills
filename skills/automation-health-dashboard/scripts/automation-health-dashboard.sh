@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# Automation Health Dashboard Generator — kagenti org
+# Automation Health Dashboard Generator
 # Combines link-health and dep-bump program metrics into a single executive-
 # facing markdown dashboard. Pushes to a standing fork-based PR.
 #
@@ -13,23 +13,23 @@ set -euo pipefail
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/program-lib.sh"
 
 # --- CLI args ---
 DRY_RUN=true
-ORG="kagenti"
 VERBOSE=false
 SHOW_HELP=false
-FORK_OWNER="${FORK_OWNER:-clawgenti}"
-KAGENTI_DIR="${KAGENTI_DIR:-}"
+MAIN_REPO_DIR="${MAIN_REPO_DIR:-}"
+INDEX_FILE_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --dry-run) DRY_RUN=true; shift ;;
     --live) DRY_RUN=false; shift ;;
     --reports-dir) REPORTS_DIR="$2"; shift 2 ;;
-    --kagenti-dir) KAGENTI_DIR="$2"; shift 2 ;;
-    --org) ORG="$2"; shift 2 ;;
-    --fork-owner) FORK_OWNER="$2"; shift 2 ;;
+    --index) INDEX_FILE_ARG="$2"; shift 2 ;;
+    --main-repo-dir) MAIN_REPO_DIR="$2"; shift 2 ;;
     --verbose) VERBOSE=true; shift ;;
     --help|-h) SHOW_HELP=true; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -49,20 +49,44 @@ Usage:
 Options:
   --dry-run           Generate and preview dashboard (default)
   --live              Commit and push to fork, create/update PR
-  --reports-dir DIR   Base reports directory (default: $REPORTS_DIR or ./reports)
-  --kagenti-dir DIR   Path to kagenti repo clone (default: $KAGENTI_DIR)
-  --org NAME          GitHub org (default: kagenti)
-  --fork-owner NAME   Fork owner for PR workflow (default: clawgenti)
-  --verbose           Print diagnostic output
-  --help, -h          Show this help
+  --reports-dir DIR    Base reports directory (default: $REPORTS_DIR or ./reports)
+  --index PATH         Path to _index.json (default: $REPOMAN_INDEX_FILE or
+                       <reports-dir>/_index.json). When present, drives which
+                       programs render and their headings; falls back to
+                       disk-derived discovery when absent.
+  --main-repo-dir DIR  Path to the report-target repo clone, overriding the
+                       REPOS_DIR-derived default (default: $MAIN_REPO_DIR)
+  --verbose            Print diagnostic output
+  --help, -h           Show this help
 
 Environment:
-  REPORTS_DIR   Base directory containing link-scan/ and dep-bump/ subdirs
-  KAGENTI_DIR   Path to the org's main repo clone (for live mode git operations)
-  FORK_OWNER    Fork owner for cross-fork PRs
+  REPORTS_DIR        Base directory containing program report subdirs
+  REPOMAN_INDEX_FILE Path to _index.json (default: <reports-dir>/_index.json)
+  MAIN_REPO_DIR      Path to the report-target repo clone (live mode git ops);
+                     overrides the REPOS_DIR-derived default
+  FORK_OWNER         Fork owner for cross-fork PRs
 HELP
   exit 0
 fi
+
+# Resolve deployment constants (repos_dir, fork_owner) from ~/.repoman/config.json.
+repoman_config
+
+# Report-PR destination. The org main repo's docs/ folder feeds the docs site
+# (rossoctl.dev) and cannot host machine-generated reports, so the standing
+# dashboard PR lands under automation-health/ in the automation repo. A single
+# file, overwritten in place each run: trend tooling reconstructs history by
+# replaying git commit parents, so we store state (not dated snapshots) and
+# avoid the files-vs-diffs-on-Git anti-pattern (rossoctl/automation#44).
+# TODO(RepoMan Phase 2): move report_target_repo/source_repo to programs/health-dashboard.json.
+REPORT_TARGET_REPO="rossoctl/automation"
+SOURCE_REPO="rossoctl/automation"
+REPORT_TARGET_OWNER="${REPORT_TARGET_REPO%%/*}"
+REPORT_TARGET_NAME="${REPORT_TARGET_REPO##*/}"
+REPORT_TARGET_PATH="automation-health/automation-health.md"
+# Clone dir for the report target: honor an explicit --main-repo-dir/MAIN_REPO_DIR
+# override, else derive from the owner-namespaced layout ($REPOS_DIR/<owner>/<name>).
+REPORT_TARGET_DIR="${MAIN_REPO_DIR:-$REPOS_DIR/$REPORT_TARGET_OWNER/$REPORT_TARGET_NAME}"
 
 # --- Validate inputs ---
 if [ -z "${REPORTS_DIR:-}" ]; then
@@ -76,35 +100,86 @@ if [ -z "${REPORTS_DIR:-}" ]; then
   fi
 fi
 
-LINK_SCAN_DIR="$REPORTS_DIR/link-scan"
-DEP_BUMP_DIR="$REPORTS_DIR/dep-bump"
-PR_REVIEW_DIR="$REPORTS_DIR/pr-review"
+INDEX_FILE="${INDEX_FILE_ARG:-${REPOMAN_INDEX_FILE:-$REPORTS_DIR/_index.json}}"
 
+# Program-id -> display-name lookup (bash 3.2 safe, no assoc arrays). Only ids
+# listed here have a corresponding extraction block further down; an index
+# entry for any other id is a known/skippable program, not an error.
+display_name_for() {
+  case "$1" in
+    link-health) echo "Link Health" ;;
+    dep-bump)    echo "Dependency Bumps" ;;
+    *)           echo "" ;;
+  esac
+}
+
+LINK_SCAN_DIR=""
+DEP_BUMP_DIR=""
 HAS_LINK_HEALTH=false
 HAS_DEP_BUMP=false
+LINK_HEALTH_HEADING="Link Health"
+DEP_BUMP_HEADING="Dependency Bumps"
 
-if [ -f "$LINK_SCAN_DIR/latest.json" ] && [ -f "$LINK_SCAN_DIR/history.json" ]; then
-  HAS_LINK_HEALTH=true
-fi
-if [ -f "$DEP_BUMP_DIR/latest.json" ] && [ -f "$DEP_BUMP_DIR/history.json" ]; then
-  HAS_DEP_BUMP=true
+if [ -f "$INDEX_FILE" ]; then
+  if ! jq empty "$INDEX_FILE" >/dev/null 2>&1; then
+    echo "ERROR: Index file is not valid JSON: $INDEX_FILE"
+    exit 1
+  fi
+
+  while IFS= read -r prog_id; do
+    [ -z "$prog_id" ] && continue
+    known_heading=$(display_name_for "$prog_id")
+    if [ -z "$known_heading" ]; then
+      echo "Skipping unknown program id from index (no extraction block): $prog_id"
+      continue
+    fi
+
+    entry_path=$(jq -r --arg id "$prog_id" '.[$id].report_path // ""' "$INDEX_FILE")
+    entry_display=$(jq -r --arg id "$prog_id" '.[$id].display_name // ""' "$INDEX_FILE")
+    [ -z "$entry_display" ] && entry_display="$known_heading"
+
+    if [ -z "$entry_path" ] || [ ! -f "$entry_path/latest.json" ] || [ ! -f "$entry_path/history.json" ]; then
+      echo "Skipping program with missing reports: $prog_id ($entry_path)"
+      continue
+    fi
+
+    case "$prog_id" in
+      link-health)
+        LINK_SCAN_DIR="$entry_path"
+        HAS_LINK_HEALTH=true
+        LINK_HEALTH_HEADING="$entry_display"
+        ;;
+      dep-bump)
+        DEP_BUMP_DIR="$entry_path"
+        HAS_DEP_BUMP=true
+        DEP_BUMP_HEADING="$entry_display"
+        ;;
+    esac
+  done < <(jq -r 'keys[]' "$INDEX_FILE")
+else
+  # Disk-derived fallback: no index, probe the known report subdirs directly.
+  LINK_SCAN_DIR="$REPORTS_DIR/link-health"
+  DEP_BUMP_DIR="$REPORTS_DIR/dep-bump"
+
+  if [ -f "$LINK_SCAN_DIR/latest.json" ] && [ -f "$LINK_SCAN_DIR/history.json" ]; then
+    HAS_LINK_HEALTH=true
+    LINK_HEALTH_HEADING=$(display_name_for "link-health")
+  fi
+  if [ -f "$DEP_BUMP_DIR/latest.json" ] && [ -f "$DEP_BUMP_DIR/history.json" ]; then
+    HAS_DEP_BUMP=true
+    DEP_BUMP_HEADING=$(display_name_for "dep-bump")
+  fi
 fi
 
-HAS_PR_REVIEW=false
-if [ -f "$PR_REVIEW_DIR/fixer-history.json" ]; then
-  HAS_PR_REVIEW=true
-fi
-
-if [ "$HAS_LINK_HEALTH" = false ] && [ "$HAS_DEP_BUMP" = false ] && [ "$HAS_PR_REVIEW" = false ]; then
+if [ "$HAS_LINK_HEALTH" = false ] && [ "$HAS_DEP_BUMP" = false ]; then
   echo "ERROR: No program reports found in $REPORTS_DIR"
-  echo "Expected one of: $LINK_SCAN_DIR/latest.json, $DEP_BUMP_DIR/latest.json, $PR_REVIEW_DIR/fixer-history.json"
+  echo "Expected: $REPORTS_DIR/link-health/latest.json and/or $REPORTS_DIR/dep-bump/latest.json"
   exit 1
 fi
 
 PROGRAMS_ACTIVE=0
 if [ "$HAS_LINK_HEALTH" = true ]; then PROGRAMS_ACTIVE=$((PROGRAMS_ACTIVE + 1)); fi
 if [ "$HAS_DEP_BUMP" = true ]; then PROGRAMS_ACTIVE=$((PROGRAMS_ACTIVE + 1)); fi
-if [ "$HAS_PR_REVIEW" = true ]; then PROGRAMS_ACTIVE=$((PROGRAMS_ACTIVE + 1)); fi
 
 # --- Setup ---
 TMPDIR=$(mktemp -d)
@@ -185,8 +260,6 @@ LH_BROKEN_EXTERNAL=0
 LH_FIRST_INTERNAL=0
 LH_FIRST_EXTERNAL=0
 LH_TREND_TABLE="| - | - | - | - |"
-lh_int_trend=""
-lh_ext_trend=""
 
 if [ "$HAS_LINK_HEALTH" = true ]; then
   LH_REPOS_SCANNED=$(jq '.repos_scanned // 0' "$LINK_SCAN_DIR/latest.json")
@@ -285,59 +358,6 @@ if [ "$HAS_DEP_BUMP" = true ]; then
 fi
 
 # =============================================================================
-# Step 4b: Compute PR-review section
-# =============================================================================
-
-PR_REVIEWS_TOTAL=0
-PR_REVIEWS_FAILED=0
-PR_QUEUE_NOW=0
-PR_TTM_REVIEWED="N/A"
-PR_TTM_UNREVIEWED="N/A"
-PR_TTM_BEFORE="N/A"
-PR_TTM_AFTER="N/A"
-PR_ACTIVATIONS_NOTE="n/a"
-PR_TREND_TABLE="| - | - | - | - |"
-
-if [ "$HAS_PR_REVIEW" = true ]; then
-  PR_REVIEWS_TOTAL=$(jq '[.[] | .prs_reviewed // 0] | add // 0' "$PR_REVIEW_DIR/fixer-history.json")
-  PR_REVIEWS_FAILED=$(jq '[.[] | .prs_failed // 0] | add // 0' "$PR_REVIEW_DIR/fixer-history.json")
-
-  if [ -f "$PR_REVIEW_DIR/latest.json" ]; then
-    PR_QUEUE_NOW=$(jq '.eligible_prs | length' "$PR_REVIEW_DIR/latest.json" 2>/dev/null || echo "0")
-  fi
-
-  if [ -f "$PR_REVIEW_DIR/impact.json" ]; then
-    PR_TTM_REVIEWED=$(jq '.reviewed.median_ttm_hours // "N/A"'           "$PR_REVIEW_DIR/impact.json")
-    PR_TTM_UNREVIEWED=$(jq '.unreviewed.median_ttm_hours // "N/A"'        "$PR_REVIEW_DIR/impact.json")
-    PR_TTM_BEFORE=$(jq '.before_activation.median_ttm_hours // "N/A"'    "$PR_REVIEW_DIR/impact.json")
-    PR_TTM_AFTER=$(jq '.after_activation.median_ttm_hours // "N/A"'      "$PR_REVIEW_DIR/impact.json")
-    # Per-repo activation summary, e.g. "kagenti/kagenti since 2026-06-13; ..."
-    PR_ACTIVATIONS_NOTE=$(jq -r '
-      (.activations // []) |
-      if length == 0 then "n/a"
-      else [.[] | "\(.repo) since \(.activation | split("T")[0])"] | join("; ")
-      end' "$PR_REVIEW_DIR/impact.json" 2>/dev/null || echo "n/a")
-  fi
-
-  # Trend: last 10 fixer runs (reviewed / processed / failed)
-  # Date + time (UTC, to the minute) so multiple runs on the same day stay distinct.
-  PR_TREND_TABLE=$(jq -r '
-    .[-10:] | reverse | .[] |
-    "| \(.date[0:16] | sub("T";" ")) | \(.prs_reviewed // 0) | \(.prs_processed // 0) | \(.prs_failed // 0) |"
-  ' "$PR_REVIEW_DIR/fixer-history.json" 2>/dev/null || echo "| - | - | - | - |")
-
-  if [ "$VERBOSE" = true ]; then
-    echo "PR-review metrics:"
-    echo "  Reviews (cumulative): $PR_REVIEWS_TOTAL (failed: $PR_REVIEWS_FAILED)"
-    echo "  Queue now: $PR_QUEUE_NOW"
-    echo "  TTM before/after activation: ${PR_TTM_BEFORE}h / ${PR_TTM_AFTER}h"
-    echo "  TTM reviewed/unreviewed: ${PR_TTM_REVIEWED}h / ${PR_TTM_UNREVIEWED}h"
-    echo "  Activations: $PR_ACTIVATIONS_NOTE"
-    echo ""
-  fi
-fi
-
-# =============================================================================
 # Step 5: Compute cross-program coverage
 # =============================================================================
 
@@ -349,39 +369,30 @@ TOTAL_UNIQUE_REPOS=0
 # Collect repos from each program
 lh_repos=""
 db_repos=""
-pr_repos=""
 
 if [ "$HAS_LINK_HEALTH" = true ]; then
-  lh_repos=$(jq -r '[.broken[].repo] | unique | .[] | split("/")[1]' "$LINK_SCAN_DIR/latest.json" 2>/dev/null | sort -u || true)
+  # .repo is the full owner/name ref (extract-broken-links.sh emits it verbatim).
+  # Key on the full ref so it matches db_repos below -- stripping the owner here
+  # would make the two program sets un-mergeable (no repo could match both).
+  lh_repos=$(jq -r '[.broken[].repo] | unique | .[]' "$LINK_SCAN_DIR/latest.json" 2>/dev/null | sort -u || true)
   # Also include repos scanned (from history, repos_scanned is a count not a list)
   # Fall back to broken repos as proxy for "scanned repos"
 fi
 
 if [ "$HAS_DEP_BUMP" = true ]; then
-  # Repos with dependabot activity
-  db_repos=$(jq -r '([.stale_prs[].repo] + [.coverage_gaps[].repo]) | unique | .[] | split("/")[1]' "$DEP_BUMP_DIR/latest.json" 2>/dev/null | sort -u || true)
-fi
-
-if [ "$HAS_PR_REVIEW" = true ]; then
-  # Prefer per-repo activations from impact.json (short-name via split("/")[1]);
-  # fall back to the four configured repo short-names.
-  if [ -f "$PR_REVIEW_DIR/impact.json" ]; then
-    pr_repos=$(jq -r '[.activations[].repo] | unique | .[] | split("/")[1]' "$PR_REVIEW_DIR/impact.json" 2>/dev/null | sort -u || true)
-  fi
-  if [ -z "$pr_repos" ]; then
-    pr_repos=$(printf '%s\n' kagenti kagenti-extensions automation agent-skills | sort -u)
-  fi
+  # Repos with dependabot activity -- .repo is the full owner/name ref, same
+  # shape as lh_repos, so the sort -u merge and grep -qxF cross-check align.
+  db_repos=$(jq -r '([.stale_prs[].repo] + [.coverage_gaps[].repo]) | unique | .[]' "$DEP_BUMP_DIR/latest.json" 2>/dev/null | sort -u || true)
 fi
 
 # Merge and produce table
-all_repos=$(printf '%s\n%s\n%s\n' "$lh_repos" "$db_repos" "$pr_repos" | sort -u | grep -v '^$' || true)
+all_repos=$(printf '%s\n%s\n' "$lh_repos" "$db_repos" | sort -u | grep -v '^$' || true)
 TOTAL_UNIQUE_REPOS=$(echo "$all_repos" | grep -c . || echo "0")
 
 while IFS= read -r repo; do
   [ -z "$repo" ] && continue
   has_lh="no"
   has_db="no"
-  has_pr="no"
   count=0
 
   if echo "$lh_repos" | grep -qxF "$repo"; then
@@ -392,12 +403,8 @@ while IFS= read -r repo; do
     has_db="yes"
     count=$((count + 1))
   fi
-  if echo "$pr_repos" | grep -qxF "$repo"; then
-    has_pr="yes"
-    count=$((count + 1))
-  fi
 
-  COVERAGE_TABLE="${COVERAGE_TABLE}| $repo | $has_lh | $has_db | $has_pr | $count |
+  COVERAGE_TABLE="${COVERAGE_TABLE}| $repo | $has_lh | $has_db | $count |
 "
   if [ "$count" -ge 1 ]; then REPOS_UNDER_ONE=$((REPOS_UNDER_ONE + 1)); fi
   if [ "$count" -ge "$PROGRAMS_ACTIVE" ]; then REPOS_UNDER_ALL=$((REPOS_UNDER_ALL + 1)); fi
@@ -418,9 +425,7 @@ fi
 CRON_TABLE="| link-health-scanner | Mon/Wed/Fri 7am ET | $LAST_SCAN_DATE | ok |
 | link-health-fixer | Tue/Thu 8am ET | $LAST_SCAN_DATE | ok |
 | dep-bump-scanner | Tue/Thu 10am ET | $LAST_SCAN_DATE | ok |
-| dep-bump-fixer | Tue/Thu 12pm ET | $LAST_SCAN_DATE | ok |
-| pr-review-scanner | every ~15 min | $LAST_SCAN_DATE | ok |
-| pr-review-fixer | every ~15 min | $LAST_SCAN_DATE | ok |"
+| dep-bump-fixer | Tue/Thu 12pm ET | $LAST_SCAN_DATE | ok |"
 
 # =============================================================================
 # Step 7: Generate markdown
@@ -439,11 +444,10 @@ cat > "$TMPDIR/automation-health.md" << DASHBOARD_EOF
 | Total issues auto-resolved | $TOTAL_ISSUES_RESOLVED |
 | Total PRs auto-opened | $TOTAL_PRS_OPENED |
 | Estimated hours saved | ${HOURS_SAVED} hrs (at 15 min/resolved issue) |
-| PRs reviewed by clawgenti | $PR_REVIEWS_TOTAL |
 | Programs active | $PROGRAMS_ACTIVE |
 | Last successful scan | $LAST_SCAN_DATE |
 
-## Link Health
+## $LINK_HEALTH_HEADING
 
 | Metric | Value | Trend |
 |--------|-------|-------|
@@ -460,7 +464,7 @@ cat > "$TMPDIR/automation-health.md" << DASHBOARD_EOF
 |------|----------|----------|-------|
 $LH_TREND_TABLE
 
-## Dependency Bumps
+## $DEP_BUMP_HEADING
 
 | Metric | Value | Trend |
 |--------|-------|-------|
@@ -483,38 +487,10 @@ $DB_TIER_TABLE
 |------|----------------|---------------|-------|
 $DB_TREND_TABLE
 
-## PR Review Bot
-
-Headline impact — median time-to-merge before vs. after the bot became active in each repo:
-
-| Metric | Value | Note |
-|--------|-------|------|
-| Median TTM — before activation | ${PR_TTM_BEFORE}h | per repo, PRs opened before its first bot review |
-| Median TTM — after activation | ${PR_TTM_AFTER}h | per repo, PRs opened on/after its first bot review |
-| PRs reviewed (cumulative) | $PR_REVIEWS_TOTAL | failed: $PR_REVIEWS_FAILED |
-| Currently queued for review | $PR_QUEUE_NOW | |
-
-> Per-repo activation: $PR_ACTIVATIONS_NOTE
-
-Reviewed vs. unreviewed (secondary — interpret with care):
-
-| Metric | Value | Note |
-|--------|-------|------|
-| Median TTM — reviewed | ${PR_TTM_REVIEWED}h | PRs clawgenti reviewed |
-| Median TTM — unreviewed | ${PR_TTM_UNREVIEWED}h | PRs without a bot review |
-
-> Reviewed PRs are self-selected: \`ready-for-ai-review\` is applied to substantive PRs, so a *higher* reviewed TTM reflects which PRs get reviewed, not the bot slowing merges. Use the before/after rows above for impact.
-
-### Review Activity (last 10 runs)
-
-| Date (UTC) | Reviewed | Processed | Failed |
-|------------|----------|-----------|--------|
-$PR_TREND_TABLE
-
 ## Cross-Program Coverage
 
-| Repo | Link Health | Dep Bump | PR Review | Programs |
-|------|-------------|----------|-----------|----------|
+| Repo | Link Health | Dep Bump | Programs |
+|------|-------------|----------|----------|
 $COVERAGE_TABLE
 
 ### Coverage Summary
@@ -528,7 +504,7 @@ $COVERAGE_TABLE
 $CRON_TABLE
 
 ---
-*Generated by Kagenti Automation Health Dashboard. Do not edit manually.*
+*Generated by Rossoctl Automation Health Dashboard. Do not edit manually.*
 DASHBOARD_EOF
 
 echo "Dashboard generated ($TMPDIR/automation-health.md)"
@@ -543,29 +519,26 @@ if [ "$DRY_RUN" = true ]; then
   echo "---"
   cat "$TMPDIR/automation-health.md"
   echo "---"
-  echo "[DRY RUN] Would push docs/automation-health.md to fork and create/update PR"
+  echo "[DRY RUN] Would push $REPORT_TARGET_PATH to fork and create/update PR against $REPORT_TARGET_REPO"
 else
-  if [ -z "$KAGENTI_DIR" ]; then
-    echo "ERROR: KAGENTI_DIR is not set (required for live mode)."
-    echo "Export it to the path of the kagenti/kagenti repo clone:"
-    echo "  export KAGENTI_DIR=~/kagenti/kagenti"
-    exit 1
-  fi
-
-  if [ ! -d "$KAGENTI_DIR/.git" ]; then
-    echo "ERROR: $KAGENTI_DIR does not appear to be a git repository."
+  if [ ! -d "$REPORT_TARGET_DIR/.git" ]; then
+    echo "ERROR: $REPORT_TARGET_DIR does not appear to be a git repository."
+    echo "Export MAIN_REPO_DIR or set REPOS_DIR so $REPORT_TARGET_REPO can be found:"
+    echo "  export MAIN_REPO_DIR=$REPOS_DIR/$REPORT_TARGET_OWNER/$REPORT_TARGET_NAME"
     exit 1
   fi
 
   FORK_REMOTE="$FORK_OWNER"
   DASHBOARD_BRANCH="automation/health-dashboard"
 
-  cd "$KAGENTI_DIR"
+  cd "$REPORT_TARGET_DIR"
 
-  # Ensure fork remote exists
-  if ! git remote get-url "$FORK_REMOTE" &>/dev/null; then
-    git remote add "$FORK_REMOTE" "https://github.com/$FORK_OWNER/$ORG.git"
-  fi
+  # Ensure the fork remote exists AND points at the current target. set-url
+  # corrects a stale remote (e.g. one left by a prior deployment pointing at the
+  # old report repo); the || add branch handles the not-yet-registered case.
+  fork_url="https://github.com/$FORK_OWNER/${REPORT_TARGET_NAME}.git"
+  git remote set-url "$FORK_REMOTE" "$fork_url" 2>/dev/null \
+    || git remote add "$FORK_REMOTE" "$fork_url"
 
   # Fetch fork's branch if it exists, otherwise create from main
   if git fetch "$FORK_REMOTE" "$DASHBOARD_BRANCH" 2>/dev/null; then
@@ -576,19 +549,19 @@ else
       || git checkout -B "$DASHBOARD_BRANCH"
   fi
 
-  mkdir -p docs
-  cp "$TMPDIR/automation-health.md" docs/automation-health.md
-  git add docs/automation-health.md
+  mkdir -p "$(dirname "$REPORT_TARGET_PATH")"
+  cp "$TMPDIR/automation-health.md" "$REPORT_TARGET_PATH"
+  git add "$REPORT_TARGET_PATH"
   git commit -s -m "docs: Update automation health dashboard ($SCAN_TIME_ET)" 2>/dev/null || echo "No changes to commit"
   git push "$FORK_REMOTE" "$DASHBOARD_BRANCH" 2>/dev/null || echo "WARN: Failed to push dashboard to fork"
 
   # Create or update standing cross-fork PR
-  existing_pr=$(gh api "repos/$ORG/$ORG/pulls?head=$FORK_OWNER:$DASHBOARD_BRANCH&state=open" \
+  existing_pr=$(gh api "repos/$REPORT_TARGET_REPO/pulls?head=$FORK_OWNER:$DASHBOARD_BRANCH&state=open" \
     --jq '.[0].number' 2>/dev/null || echo "")
 
   pr_body="## Summary
 
-Auto-updated by Kagenti Automation Health Dashboard. This PR is continuously updated with each generation. Merge when convenient.
+Auto-updated by Rossoctl Automation Health Dashboard. This PR is continuously updated with each generation. Merge when convenient.
 
 | Metric | Value |
 |--------|-------|
@@ -599,15 +572,19 @@ Auto-updated by Kagenti Automation Health Dashboard. This PR is continuously upd
 
 ## Related issue(s)
 
-- kagenti/kagenti#1260"
+- $REPORT_TARGET_REPO#1260
+
+## Automation program
+
+Generated by the [Rossoctl Automation Health Dashboard](https://github.com/$SOURCE_REPO/blob/main/standing-orders/health-dashboard.md)."
 
   if [ -z "$existing_pr" ] || [ "$existing_pr" = "null" ]; then
-    gh pr create --repo "$ORG/$ORG" \
+    gh pr create --repo "$REPORT_TARGET_REPO" \
       --head "$FORK_OWNER:$DASHBOARD_BRANCH" --base main \
       --title "docs: Automation health dashboard (auto-updated)" \
       --body "$pr_body" 2>/dev/null || echo "WARN: Failed to create dashboard PR"
   else
-    gh pr edit "$existing_pr" --repo "$ORG/$ORG" --body "$pr_body" 2>/dev/null || true
+    gh pr edit "$existing_pr" --repo "$REPORT_TARGET_REPO" --body "$pr_body" 2>/dev/null || true
   fi
 
   echo "Dashboard committed and pushed"
