@@ -37,14 +37,17 @@ def run_gh(args, timeout=60):
 
 def get_org_repos(org):
     repos = run_gh(['repo', 'list', org, '--limit', '100', '--json', 'name'])
-    return [r['name'] for r in (repos or [])]
+    return [{'owner': org, 'name': r['name']} for r in (repos or [])]
 
 
-def get_epics(org, repos):
+def get_epics(repos):
+    """repos is a list of {owner, name}; each epic records its real owner so
+    activity fetches query the correct owner even across a multi-owner set."""
     epics = []
     for repo in repos:
+        owner, name = repo['owner'], repo['name']
         issues = run_gh([
-            'issue', 'list', '-R', f'{org}/{repo}',
+            'issue', 'list', '-R', f'{owner}/{name}',
             '--label', 'epic', '--state', 'open',
             '--limit', '100',
             '--json', 'number,title,assignees,labels,body,url,updatedAt'
@@ -52,8 +55,8 @@ def get_epics(org, repos):
         if not issues:
             continue
         for issue in issues:
-            issue['repo'] = repo
-            issue['org'] = org
+            issue['repo'] = name
+            issue['org'] = owner
             epics.append(issue)
     return epics
 
@@ -252,22 +255,39 @@ def query_projects_v2_status(org, project_number=PROJECT_NUMBER):
 
 
 def main():
-    p = argparse.ArgumentParser(description='Fetch active epics across a GitHub org')
-    p.add_argument('--org', required=True, help='GitHub organization')
+    p = argparse.ArgumentParser(description='Fetch active epics across one or more GitHub owners')
+    # --org is optional: it drives org-wide discovery (no --repos) and the
+    # Projects v2 status lookup (org-scoped). An owner-qualified --repos list
+    # may span multiple owners and needs no --org.
+    p.add_argument('--org', help='GitHub organization (org-wide discovery / Projects v2 status)')
     p.add_argument('--since', help='Start of reporting period (YYYY-MM-DD)')
     p.add_argument('--until', help='End of reporting period (YYYY-MM-DD)')
     p.add_argument('--max-epics', type=int, default=10, help='Maximum epics to include')
     p.add_argument('--skip-projects', action='store_true', help='Skip GitHub Projects v2 query')
     p.add_argument('--repos', nargs='+', metavar='OWNER/REPO',
-                   help='Explicit owner-qualified repo list; when set, skips org-wide discovery')
+                   help='Explicit owner-qualified repo list (may span owners); when set, skips org-wide discovery')
     args = p.parse_args()
+    if not args.repos and not args.org:
+        p.error("one of --repos (owner-qualified) or --org (for org-wide discovery) is required")
 
     since = args.since or (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
     until = args.until or datetime.now().strftime('%Y-%m-%d')
 
     if args.repos:
-        # Owner-qualified -> bare names; get_epics builds 'org/repo' from --org.
-        repos = [item.rpartition('/')[2] or item for item in args.repos]
+        # Parse owner-qualified entries into {owner, name}. A bare name falls
+        # back to --org for its owner; without --org it is ambiguous and skipped.
+        repos = []
+        for item in args.repos:
+            item = item.strip()
+            if not item:
+                continue
+            owner, _, name = item.rpartition('/')
+            if not owner:
+                if not args.org:
+                    print(f"Warning: skipping bare repo '{item}' (no --org to supply owner)", file=sys.stderr)
+                    continue
+                owner = args.org
+            repos.append({'owner': owner, 'name': name})
     else:
         print(f"Fetching repos for {args.org}...", file=sys.stderr)
         repos = get_org_repos(args.org)
@@ -276,21 +296,32 @@ def main():
         json.dump({'epics': [], 'fallback_mode': True, 'period': {'since': since, 'until': until}}, sys.stdout, indent=2)
         sys.exit(0)
 
+    # A report spanning multiple owners cannot use one org-scoped Projects v2
+    # board; detect that and fall back to activity-based detection.
+    owners = []
+    for r in repos:
+        if r['owner'] not in owners:
+            owners.append(r['owner'])
+    multi_owner = len(owners) > 1
+
     print(f"Scanning {len(repos)} repos for epics...", file=sys.stderr)
-    epics = get_epics(args.org, repos)
+    epics = get_epics(repos)
     print(f"Found {len(epics)} open epics", file=sys.stderr)
 
     status_map = None
     fallback_mode = False
-    if not args.skip_projects:
+    projects_org = args.org or (owners[0] if len(owners) == 1 else None)
+    if not args.skip_projects and not multi_owner and projects_org:
         print("Querying GitHub Projects v2 for status...", file=sys.stderr)
-        status_map = query_projects_v2_status(args.org)
+        status_map = query_projects_v2_status(projects_org)
         if status_map is None:
             print("Warning: Projects v2 query failed (missing read:project scope?). Falling back to activity-based detection.", file=sys.stderr)
             fallback_mode = True
         else:
             print(f"Got status for {len(status_map)} project items", file=sys.stderr)
     else:
+        if multi_owner and not args.skip_projects:
+            print("Note: multi-owner report — skipping org-scoped Projects v2 status; using activity-based detection.", file=sys.stderr)
         fallback_mode = True
 
     results = []
@@ -307,8 +338,9 @@ def main():
             board_status = status_map[url]
 
         # Primary signal: sub-issue activity (no read:project scope needed).
-        sub = get_sub_issue_activity(args.org, epic['repo'], epic['number'], since, until)
-        activity = get_activity_via_timeline(args.org, epic['repo'], epic['number'], since, until)
+        # Use the epic's own owner so activity is queried per-repo across owners.
+        sub = get_sub_issue_activity(epic['org'], epic['repo'], epic['number'], since, until)
+        activity = get_activity_via_timeline(epic['org'], epic['repo'], epic['number'], since, until)
 
         # An epic is active if it has open sub-issues (backlog / in-progress),
         # a sub-issue closed this window, or a merged-PR cross-reference this
