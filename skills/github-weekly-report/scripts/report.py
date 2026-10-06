@@ -447,8 +447,11 @@ def generate_report(org, since, until, enhanced=False, repos=None):
 
     return '\n'.join(lines), repos_data, epic_data
 
-def build_json_output(org, since, until, repos_data, epic_data=None):
-    """Build structured JSON suitable for AI synthesis of highlights and action items."""
+def build_json_output(since, until, repos_data, epic_data=None):
+    """Build structured JSON suitable for AI synthesis of highlights and action items.
+
+    The owner set (and the back-compat single-owner 'org' field) is derived from
+    repos_data, so no separate org argument is needed."""
     owners = []
     for d in repos_data:
         if d['owner'] not in owners:
@@ -552,7 +555,7 @@ def main():
         print(report)
 
     if args.json_output:
-        data = build_json_output(args.org, since, until, repos_data, epic_data)
+        data = build_json_output(since, until, repos_data, epic_data)
         with open(args.json_output, 'w') as f:
             json.dump(data, f, indent=2)
         print(f"JSON data written to: {args.json_output}", file=sys.stderr)
