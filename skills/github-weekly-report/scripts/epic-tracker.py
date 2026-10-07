@@ -274,20 +274,28 @@ def main():
     until = args.until or datetime.now().strftime('%Y-%m-%d')
 
     if args.repos:
-        # Parse owner-qualified entries into {owner, name}. A bare name falls
-        # back to --org for its owner; without --org it is ambiguous and skipped.
+        # Parse owner-qualified entries into {owner, name}, validating exactly as
+        # report.py's normalize_repo_args does so the two consumers of the same
+        # --repos contract never diverge. A bare name needs --org for its owner;
+        # a malformed entry ('owner/', '/name', 'a/b/c') is a hard error, not a
+        # soft gh warning downstream.
         repos = []
         for item in args.repos:
             item = item.strip()
             if not item:
                 continue
-            owner, _, name = item.rpartition('/')
-            if not owner:
+            parts = item.split('/')
+            if len(parts) == 1:
                 if not args.org:
-                    print(f"Warning: skipping bare repo '{item}' (no --org to supply owner)", file=sys.stderr)
-                    continue
-                owner = args.org
-            repos.append({'owner': owner, 'name': name})
+                    sys.exit(
+                        f"--repos entry '{item}' is a bare name but no --org was given. "
+                        f"Use '<owner>/<repo>' or pass --org."
+                    )
+                repos.append({'owner': args.org, 'name': parts[0]})
+            elif len(parts) == 2 and parts[0] and parts[1]:
+                repos.append({'owner': parts[0], 'name': parts[1]})
+            else:
+                sys.exit(f"--repos entry '{item}' is malformed; expected '<repo>' or '<owner>/<repo>'.")
     else:
         print(f"Fetching repos for {args.org}...", file=sys.stderr)
         repos = get_org_repos(args.org)
