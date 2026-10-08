@@ -1,0 +1,7 @@
+.claude/settings.local.json
+
+# Per-skill provenance written at runtime by resolve_skill_meta (github-api.sh)
+# beside the vendored scripts; pinned to each checkout, never source-of-truth.
+# Includes the atomic-write transient so an interrupted write cannot be committed.
+skills/*/scripts/_meta.*.json
+skills/*/scripts/_meta.*.json.tmp.*

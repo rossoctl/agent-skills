@@ -28,38 +28,37 @@ def run_gh(args):
         sys.exit(1)
 
 def get_repos(org):
-    return run_gh(['repo', 'list', org, '--limit', '100', '--json', 'name'])
+    return [{'owner': org, 'name': r['name']} for r in
+            run_gh(['repo', 'list', org, '--limit', '100', '--json', 'name'])]
 
 def normalize_repo_args(repo_args, org):
-    """Turn --repos values into the bare-name dicts get_repos returns, scoped to
-    a single owner. Accepts a bare name ('operator') or an owner-qualified name
-    whose owner matches --org ('rossoctl/operator'); both yield {'name': 'operator'}.
+    """Turn --repos values into {owner, name} dicts.
 
-    Every downstream fetch rebuilds the slug as f'{org}/{name}', so an entry whose
-    owner differs from --org would be silently reported against the wrong owner.
-    To keep the report header and the queried data consistent, reject any entry
-    that is owner-qualified with a different owner, or that is malformed (empty,
-    or more than one '/'). Order and duplicates are preserved as given.
+    The RepoMan enrolled set can span multiple owners, so entries are expected
+    owner-qualified ('rossoctl/operator' -> {'owner': 'rossoctl', 'name': 'operator'}).
+    A bare name ('operator') is still accepted for backward compatibility, but only
+    when --org is supplied to supply the owner; without --org a bare name is
+    ambiguous and rejected. Each repo is fetched against its own owner, so entries
+    from different owners coexist in one report. Order and duplicates are preserved.
     """
-    names = []
+    out = []
     for item in repo_args:
         item = item.strip()
         if not item:
             continue
         parts = item.split('/')
         if len(parts) == 1:
-            name = parts[0]
-        elif len(parts) == 2 and parts[0] and parts[1]:
-            owner, name = parts
-            if owner != org:
+            if not org:
                 sys.exit(
-                    f"--repos entry '{item}' is not in --org '{org}'. "
-                    f"Entries must be a bare repo name or '{org}/<repo>'."
+                    f"--repos entry '{item}' is a bare name but no --org was given. "
+                    f"Use '<owner>/<repo>' or pass --org."
                 )
+            out.append({'owner': org, 'name': parts[0]})
+        elif len(parts) == 2 and parts[0] and parts[1]:
+            out.append({'owner': parts[0], 'name': parts[1]})
         else:
-            sys.exit(f"--repos entry '{item}' is malformed; expected '<repo>' or '{org}/<repo>'.")
-        names.append({'name': name})
-    return names
+            sys.exit(f"--repos entry '{item}' is malformed; expected '<repo>' or '<owner>/<repo>'.")
+    return out
 
 def get_merged_prs(org, repo, since, until):
     return run_gh(['pr', 'list', '-R', f'{org}/{repo}', '--search', f'merged:{since}..{until}', '--state', 'merged', '--limit', '500', '--json', 'number,title,author,mergedAt'])
@@ -185,9 +184,12 @@ def run_epic_tracker(org, since, until, repos=None):
         return {'error': 'Epic tracker not available.'}
 
     try:
-        cmd = [sys.executable, tracker, '--org', org, '--since', since, '--until', until]
+        cmd = [sys.executable, tracker, '--since', since, '--until', until]
         if repos:
-            cmd += ['--repos', *[r['name'] for r in repos]]
+            # Pass owner-qualified so the tracker can span owners; no global --org.
+            cmd += ['--repos', *[f"{r['owner']}/{r['name']}" for r in repos]]
+        elif org:
+            cmd += ['--org', org]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
             if result.stderr:
@@ -241,26 +243,40 @@ def render_active_epics_section(data):
     lines.append("")
     return lines
 
+def owners_label(repos):
+    """Human-readable owner label for the report header. One owner -> that owner;
+    several -> a comma-joined set (preserving first-seen order)."""
+    seen = []
+    for r in repos:
+        o = r['owner']
+        if o not in seen:
+            seen.append(o)
+    if len(seen) == 1:
+        return f"[{seen[0]}](https://github.com/{seen[0]})"
+    return ', '.join(f"[{o}](https://github.com/{o})" for o in seen)
+
 def generate_report(org, since, until, enhanced=False, repos=None):
+    repos = repos if repos is not None else get_repos(org)
     lines = [
-        f"# Org Weekly Report: {since} -- {until}",
+        f"# Weekly Report: {since} -- {until}",
         "",
-        f"*Generated for [{org}](https://github.com/{org}) by the "
+        f"*Generated for {owners_label(repos)} by the "
         "[github-weekly-report](https://github.com/rossoctl/agent-skills/tree/main/skills/github-weekly-report) "
         "skill.*",
         "",
     ]
-    repos = repos if repos is not None else get_repos(org)
     repos_data = []
     for repo in repos:
+        owner = repo['owner']
         name = repo['name']
-        merged = get_merged_prs(org, name, since, until)
-        open_prs = get_open_prs(org, name)
-        new_issues = get_new_issues(org, name, since, until)
-        open_count = get_open_issues_count(org, name)
-        workflow_runs = get_workflow_runs(org, name)
+        merged = get_merged_prs(owner, name, since, until)
+        open_prs = get_open_prs(owner, name)
+        new_issues = get_new_issues(owner, name, since, until)
+        open_count = get_open_issues_count(owner, name)
+        workflow_runs = get_workflow_runs(owner, name)
         ci = analyze_ci(workflow_runs)
         repos_data.append({
+            'owner': owner,
             'name': name,
             'merged': merged,
             'open': open_prs,
@@ -280,7 +296,7 @@ def generate_report(org, since, until, enhanced=False, repos=None):
         status = "active" if (m > 0 or o > 5) else "quiet"
         ci = d['ci']
         ci_display = f"{ci['passed']}/{ci['total']} ({pct(ci['pass_rate'])})" if ci['pass_rate'] is not None else "--"
-        lines.append(f"| [{d['name']}](https://github.com/{org}/{d['name']}) | {m} | {o} | {i} | {n} | {ci_display} | {status} |")
+        lines.append(f"| [{d['name']}](https://github.com/{d['owner']}/{d['name']}) | {m} | {o} | {i} | {n} | {ci_display} | {status} |")
     lines.append(f"| **TOTAL** | **{totals['m']}** | **{totals['o']}** | **{totals['i']}** | **{totals['n']}** | | |")
     lines.append("")
 
@@ -316,11 +332,11 @@ def generate_report(org, since, until, enhanced=False, repos=None):
         for pr in d['open']:
             notes = get_pr_notes(pr)
             if 'SECURITY' in notes:
-                security_prs.append((d['name'], pr))
+                security_prs.append((d['owner'], d['name'], pr))
     if security_prs:
         lines.append("- **Security concern**: unreviewed security-related PRs:")
-        for repo_name, pr in security_prs[:3]:
-            lines.append(f"  - [{org}/{repo_name}#{pr['number']}](https://github.com/{org}/{repo_name}/pull/{pr['number']}) — {pr['title'][:80]}")
+        for repo_owner, repo_name, pr in security_prs[:3]:
+            lines.append(f"  - [{repo_owner}/{repo_name}#{pr['number']}](https://github.com/{repo_owner}/{repo_name}/pull/{pr['number']}) — {pr['title'][:80]}")
         lines.append("")
 
     # Dependabot wave
@@ -329,7 +345,7 @@ def generate_report(org, since, until, enhanced=False, repos=None):
         for d in repos_data
     )
     if dependabot_open > 10:
-        lines.append(f"- **Dependabot wave**: {dependabot_open} dependabot PRs awaiting review across org. Consider batching.")
+        lines.append(f"- **Dependabot wave**: {dependabot_open} dependabot PRs awaiting review across the reported repos. Consider batching.")
         lines.append("")
 
     if repos_data and repos_data[0]['merged'] and len(repos_data[0]['merged']) > 20:
@@ -368,7 +384,7 @@ def generate_report(org, since, until, enhanced=False, repos=None):
                 t = pr['title'][:57] + '...' if len(pr['title']) > 60 else pr['title']
                 a = pr.get('author', {}).get('login', 'unknown')
                 m = pr.get('mergedAt', '--')[:10]
-                lines.append(f"| [#{pr['number']}](https://github.com/{org}/{d['name']}/pull/{pr['number']}) | {t} | @{a} | {m} |")
+                lines.append(f"| [#{pr['number']}](https://github.com/{d['owner']}/{d['name']}/pull/{pr['number']}) | {t} | @{a} | {m} |")
             if len(d['merged']) > 15:
                 lines.append(f"| ... | +{len(d['merged'])-15} more | | |")
             lines.append("")
@@ -383,19 +399,19 @@ def generate_report(org, since, until, enhanced=False, repos=None):
                 lines.append(f"#### Ready to Merge ({len(c['ready'])})")
                 lines += ["| # | Title | Author | Notes |", "|---|-------|--------|-------|"]
                 for pr in c['ready'][:5]:
-                    lines.append(pr_row_with_notes(pr, org, d['name'], show_days=False))
+                    lines.append(pr_row_with_notes(pr, d['owner'], d['name'], show_days=False))
                 lines.append("")
             if c['changes']:
                 lines.append(f"#### Changes Requested ({len(c['changes'])})")
                 lines += ["| # | Title | Author | Days | Notes |", "|---|-------|--------|------|-------|"]
                 for pr in c['changes'][:5]:
-                    lines.append(pr_row_with_notes(pr, org, d['name']))
+                    lines.append(pr_row_with_notes(pr, d['owner'], d['name']))
                 lines.append("")
             if c['review']:
                 lines.append(f"#### Needs Review ({len(c['review'])})")
                 lines += ["| # | Title | Author | Days | Notes |", "|---|-------|--------|------|-------|"]
                 for pr in c['review'][:8]:
-                    lines.append(pr_row_with_notes(pr, org, d['name']))
+                    lines.append(pr_row_with_notes(pr, d['owner'], d['name']))
                 if len(c['review']) > 8:
                     lines.append(f"| ... | +{len(c['review'])-8} more | | | |")
                 lines.append("")
@@ -403,7 +419,7 @@ def generate_report(org, since, until, enhanced=False, repos=None):
                 lines.append(f"#### Draft PRs ({len(c['draft'])})")
                 if len(c['draft']) <= 5:
                     for pr in c['draft']:
-                        lines.append(f"- [#{pr['number']}](https://github.com/{org}/{d['name']}/pull/{pr['number']}) — {pr['title']}")
+                        lines.append(f"- [#{pr['number']}](https://github.com/{d['owner']}/{d['name']}/pull/{pr['number']}) — {pr['title']}")
                 else:
                     authors = list(set(p.get('author', {}).get('login') for p in c['draft'] if p.get('author')))
                     lines.append(f"{len(c['draft'])} drafts from {', '.join(f'@{a}' for a in authors)}")
@@ -426,15 +442,25 @@ def generate_report(org, since, until, enhanced=False, repos=None):
             for issue in d['new']:
                 t = issue['title'][:57] + '...' if len(issue['title']) > 60 else issue['title']
                 created_date = issue.get('createdAt', '--')[:10]
-                lines.append(f"| [#{issue['number']}](https://github.com/{org}/{d['name']}/issues/{issue['number']}) | {t} | {created_date} |")
+                lines.append(f"| [#{issue['number']}](https://github.com/{d['owner']}/{d['name']}/issues/{issue['number']}) | {t} | {created_date} |")
             lines.append("")
 
     return '\n'.join(lines), repos_data, epic_data
 
-def build_json_output(org, since, until, repos_data, epic_data=None):
-    """Build structured JSON suitable for AI synthesis of highlights and action items."""
+def build_json_output(since, until, repos_data, epic_data=None):
+    """Build structured JSON suitable for AI synthesis of highlights and action items.
+
+    The owner set (and the back-compat single-owner 'org' field) is derived from
+    repos_data, so no separate org argument is needed."""
+    owners = []
+    for d in repos_data:
+        if d['owner'] not in owners:
+            owners.append(d['owner'])
     result = {
-        'org': org,
+        # 'org' is retained for backward compatibility: the single owner when the
+        # report covers one, else null. 'owners' is the authoritative list.
+        'org': owners[0] if len(owners) == 1 else None,
+        'owners': owners,
         'period': {'since': since, 'until': until},
         'repos': [],
     }
@@ -453,9 +479,10 @@ def build_json_output(org, since, until, repos_data, epic_data=None):
                            pr.get('reviewDecision', 'REVIEW_REQUIRED') or 'REVIEW_REQUIRED'),
                 'notes': get_pr_notes(pr),
                 'labels': [l.get('name', '') for l in (pr.get('labels') or [])],
-                'url': f"https://github.com/{org}/{d['name']}/pull/{pr['number']}",
+                'url': f"https://github.com/{d['owner']}/{d['name']}/pull/{pr['number']}",
             })
         result['repos'].append({
+            'owner': d['owner'],
             'name': d['name'],
             'merged_prs': [
                 {
@@ -479,7 +506,7 @@ def build_json_output(org, since, until, repos_data, epic_data=None):
                     'number': i['number'],
                     'title': i['title'],
                     'created_at': (i.get('createdAt') or '')[:10],
-                    'url': f"https://github.com/{org}/{d['name']}/issues/{i['number']}",
+                    'url': f"https://github.com/{d['owner']}/{d['name']}/issues/{i['number']}",
                 }
                 for i in d['new']
             ],
@@ -498,16 +525,22 @@ def build_json_output(org, since, until, repos_data, epic_data=None):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--org', required=True)
+    # --org is optional: it supplies the owner for org-wide discovery (no --repos)
+    # and the fallback owner for any bare --repos entry. An owner-qualified
+    # --repos list needs no --org and may span multiple owners.
+    p.add_argument('--org')
     p.add_argument('--since')
     p.add_argument('--until')
     p.add_argument('--output')
     p.add_argument('--json-output', metavar='PATH', help='Write structured JSON data for AI synthesis')
     p.add_argument('--enhanced', action='store_true', help='Include additional metrics (reserved for future use)')
-    p.add_argument('--repos', nargs='+', metavar='REPO',
-                   help="Explicit repo list scoped to --org (bare '<repo>' or "
-                        "'<org>/<repo>'); when set, skips org-wide discovery")
+    p.add_argument('--repos', nargs='+', metavar='OWNER/REPO',
+                   help="Explicit repo list ('<owner>/<repo>', may span owners; a "
+                        "bare '<repo>' is allowed only with --org to supply the "
+                        "owner); when set, skips org-wide discovery")
     args = p.parse_args()
+    if not args.repos and not args.org:
+        p.error("one of --repos (owner-qualified) or --org (for org-wide discovery) is required")
     since = args.since or (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
     until = args.until or datetime.now().strftime('%Y-%m-%d')
 
@@ -522,7 +555,7 @@ def main():
         print(report)
 
     if args.json_output:
-        data = build_json_output(args.org, since, until, repos_data, epic_data)
+        data = build_json_output(since, until, repos_data, epic_data)
         with open(args.json_output, 'w') as f:
             json.dump(data, f, indent=2)
         print(f"JSON data written to: {args.json_output}", file=sys.stderr)
