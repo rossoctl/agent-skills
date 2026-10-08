@@ -345,7 +345,7 @@ def generate_report(org, since, until, enhanced=False, repos=None):
         for d in repos_data
     )
     if dependabot_open > 10:
-        lines.append(f"- **Dependabot wave**: {dependabot_open} dependabot PRs awaiting review across org. Consider batching.")
+        lines.append(f"- **Dependabot wave**: {dependabot_open} dependabot PRs awaiting review across the reported repos. Consider batching.")
         lines.append("")
 
     if repos_data and repos_data[0]['merged'] and len(repos_data[0]['merged']) > 20:

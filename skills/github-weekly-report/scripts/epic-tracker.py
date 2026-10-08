@@ -318,8 +318,20 @@ def main():
 
     status_map = None
     fallback_mode = False
-    projects_org = args.org or (owners[0] if len(owners) == 1 else None)
-    if not args.skip_projects and not multi_owner and projects_org:
+    # The Projects v2 board is org-scoped, so it is only meaningful for a
+    # single-owner report AND only against that owner's own board. Derive the
+    # board owner from the repos' actual owner, not from --org: with
+    # `--org A --repos B/repo` the set is single-owner (B) but --org names A,
+    # and querying A's board for epics that live under B returns a status_map
+    # whose keys never match any epic URL -- every board_status silently comes
+    # back empty while fallback_mode stays False, so the activity-based path is
+    # skipped instead of engaged. Treat an --org that disagrees with the single
+    # owner the same as the multi-owner case: skip the board and fall back.
+    projects_org = owners[0] if len(owners) == 1 else None
+    org_owner_disagree = (
+        projects_org is not None and args.org is not None and args.org != projects_org
+    )
+    if not args.skip_projects and not multi_owner and projects_org and not org_owner_disagree:
         print("Querying GitHub Projects v2 for status...", file=sys.stderr)
         status_map = query_projects_v2_status(projects_org)
         if status_map is None:
@@ -328,8 +340,11 @@ def main():
         else:
             print(f"Got status for {len(status_map)} project items", file=sys.stderr)
     else:
-        if multi_owner and not args.skip_projects:
-            print("Note: multi-owner report — skipping org-scoped Projects v2 status; using activity-based detection.", file=sys.stderr)
+        if not args.skip_projects:
+            if multi_owner:
+                print("Note: multi-owner report — skipping org-scoped Projects v2 status; using activity-based detection.", file=sys.stderr)
+            elif org_owner_disagree:
+                print(f"Note: --org {args.org} disagrees with the --repos owner {projects_org}; skipping org-scoped Projects v2 status and using activity-based detection.", file=sys.stderr)
         fallback_mode = True
 
     results = []
