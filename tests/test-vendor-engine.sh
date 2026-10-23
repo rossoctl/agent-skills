@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Regression test for scripts/vendor-engine.sh — the RepoMan v0.1.0 engine
-# vendor + provenance stamp. See automation
-# docs/specs/2026-10-22-repoman-v010-release-packaging-design.md §5-6.
+# vendor + provenance stamp. Part of the RepoMan release (epic
+# rossoctl/automation#72).
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENDOR="$SCRIPT_DIR/../scripts/vendor-engine.sh"

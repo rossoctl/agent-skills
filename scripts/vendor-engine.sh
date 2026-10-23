@@ -5,7 +5,7 @@ set -uo pipefail
 #
 # Explicit manifest (never a glob) so this can only ever populate the repoman
 # plugin — it must never touch a standalone skill's scripts/ (see agent-skills#51).
-# See automation docs/specs/2026-10-22-repoman-v010-release-packaging-design.md §5-6.
+# Part of the RepoMan v0.1.0 packaged release (epic rossoctl/automation#72).
 #
 #   vendor-engine.sh --source <automation-repo> --dest <repoman-scripts-dir>
 
@@ -19,7 +19,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$SRC" ] && [ -n "$DEST" ] || { echo "ERROR: --source and --dest are required" >&2; exit 2; }
 
-# The 23 engine scripts (spec §5). Flat set: nearly all source program-lib.sh,
+# The 23 engine scripts. Flat set: nearly all source program-lib.sh,
 # which sources core.sh/github-api.sh/fork.sh/org.sh/repoman-requirements.sh.
 MANIFEST="automation-health-dashboard core dep-bump-fixer dep-bump-scanner \
 extract-broken-links fork github-api link-health-fixer link-health-scanner \
