@@ -40,6 +40,6 @@ enabling a program, or running one.
 
 ### Contributors
 
-Gloire Rubambiza, Aleksander Slominski, Mariusz Sabath.
+Gloire Rubambiza, Aleksander Slominski, Mariusz Sabath, Jim Cadden.
 
 [0.1.0]: https://github.com/rossoctl/agent-skills/releases/tag/v0.1.0
