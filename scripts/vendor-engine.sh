@@ -27,11 +27,18 @@ org parse-diff-map pr-review-fixer pr-review-impact pr-review-lib \
 pr-review-scanner program-lib repo-sync repoman-check repoman-index \
 repoman-requirements repoman-run repoman-setup weekly-report"
 
-mkdir -p "$DEST"
+# Pre-validate the WHOLE manifest before copying anything, so a source missing
+# late in the list cannot leave a half-vendored dest with a stale _vendor.json.
+# shellcheck disable=SC2086
 for f in $MANIFEST; do
   if [ ! -f "$SRC/scripts/$f.sh" ]; then
-    echo "ERROR: missing engine source: $SRC/scripts/$f.sh" >&2; exit 1
+    echo "ERROR: missing engine source: $SRC/scripts/$f.sh (nothing copied)" >&2; exit 1
   fi
+done
+
+mkdir -p "$DEST"
+# shellcheck disable=SC2086
+for f in $MANIFEST; do
   if ! cp "$SRC/scripts/$f.sh" "$DEST/$f.sh"; then
     echo "ERROR: copy failed for $f.sh" >&2; exit 1
   fi

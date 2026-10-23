@@ -44,7 +44,10 @@ bash "$VENDOR" --source "$SRC" --dest "$DEST" >/dev/null 2>&1
 got2=$(jq -r '.source_sha' "$DEST/_vendor.json" 2>/dev/null)
 if [ "$got2" = "$want" ]; then echo "PASS: idempotent stamp sha"; else echo "FAIL: idempotency $got2 != $want"; fail=1; fi
 
-# --- Missing source fails loud (isolated subshell so it can't disturb SRC) ---
+# --- Missing source fails loud AND leaves the dest empty (no half-vendored dir) ---
+# A file missing mid-manifest (org.sh) must abort BEFORE any copy, so the dest
+# must contain zero .sh files — not a partial set with a stale _vendor.json.
+BADDEST="$TMP/baddest"
 missing_source_fails() (
   BAD="$TMP/bad"; mkdir -p "$BAD/scripts"
   # shellcheck disable=SC2086
@@ -53,8 +56,10 @@ missing_source_fails() (
   git -C "$BAD" init -q
   git -C "$BAD" -c user.email=t@t -c user.name=t add -A
   git -C "$BAD" -c user.email=t@t -c user.name=t commit -qm init
-  bash "$VENDOR" --source "$BAD" --dest "$TMP/baddest" >/dev/null 2>&1
+  bash "$VENDOR" --source "$BAD" --dest "$BADDEST" >/dev/null 2>&1
 )
 if ! missing_source_fails; then echo "PASS: missing source fails loud"; else echo "FAIL: missing source did not fail"; fail=1; fi
+copied=$(find "$BADDEST" -maxdepth 1 -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')
+if [ "${copied:-0}" = "0" ]; then echo "PASS: no half-vendored dir (dest empty on failure)"; else echo "FAIL: $copied files copied before the abort (half-vendored)"; fail=1; fi
 
 [ "$fail" -eq 0 ] && echo "PASS" || { echo "FAILURES"; exit 1; }

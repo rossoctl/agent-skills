@@ -1,7 +1,7 @@
 {
   "source_repo": "rossoctl/automation",
-  "source_sha": "01e25ebb2e7a092be60a3be97821d94275a36f13",
-  "vendored_at": "2026-10-23T02:58:36Z",
+  "source_sha": "0311752eba5350c74b8c9650137d3e6da65bd547",
+  "vendored_at": "2026-10-23T03:46:40Z",
   "files": [
     "automation-health-dashboard.sh",
     "core.sh",
