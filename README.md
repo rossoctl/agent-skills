@@ -73,9 +73,8 @@ cp -r skills/link-health-scanner /path/to/project/.claude/skills/
 
 All skills in this repo require:
 
-- `bash` — the RepoMan entrypoint and `repo-sync` run on `bash` 3.2+ (the macOS
-  system default); some individual skills declare `bash` 4+. Check the skill's
-  `SKILL.md` for its exact baseline.
+- `bash` 3.2+ — every skill runs on the macOS system default; no bash-4 features
+  are used.
 - `gh` (GitHub CLI, authenticated)
 - `jq`
 
