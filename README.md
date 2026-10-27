@@ -8,7 +8,7 @@ Built to the [Agent Skills specification](https://agentskills.io/specification).
 
 | Skill | Description |
 |-------|-------------|
-| [repoman](skills/repoman/) | The RepoMan entrypoint — first-time setup, enabling a program, enrolling repos or an org, or running a program across enrolled repos; a single intent-dispatching skill |
+| [repoman](skills/repoman/) | The RepoMan entrypoint and self-contained bundle — first-time setup, enabling a program, enrolling repos or an org, running a program; ships every program skill + the engine so you install once and enable programs on the fly |
 | [link-health-scanner](skills/link-health-scanner/) | Scan repos for broken links, create GitHub issues for findings |
 | [link-health-fixer](skills/link-health-fixer/) | Re-verify and fix broken links, open PRs for fixes |
 | [dep-bump-scanner](skills/dep-bump-scanner/) | Monitor Dependabot PRs, classify by severity, flag SLA breaches |
@@ -29,14 +29,24 @@ Built to the [Agent Skills specification](https://agentskills.io/specification).
 /plugin install <plugin-name>@rossoctl-agent-skills
 ```
 
-Install one plugin at a time. Replace `<plugin-name>` with a plugin name such as
-`repoman`, `link-health`, `dep-bump`, `pr-review`, `automation-health`, or
-`repo-sync`. Plugin names are the ones declared in the marketplace, which can
-differ from the per-skill directory names in the [Skills](#skills) table. For
-example, the `link-health` plugin bundles the `link-health-scanner` and
-`link-health-fixer` skills. Run `/plugin` after adding the marketplace to browse
-the authoritative list. Installing one plugin does **not** pull in the others,
-so repeat the `install` line per plugin you want.
+**Recommended: install `repoman`.** The `repoman` plugin is self-contained — it
+bundles the RepoMan entrypoint, every program skill (link-health, dep-bump,
+pr-review, repo-sync, automation-health, weekly-report) with their scanner and
+fixer skills, and the engine scripts. One install gives you the whole system and
+lets you enable more programs on the fly:
+
+```
+/plugin install repoman@rossoctl-agent-skills
+```
+
+**Or install a single program standalone.** Each program is also published as its
+own plugin, for using it on its own (e.g. a one-off PR review) without the full
+RepoMan bundle. Replace `<plugin-name>` with a plugin name such as `link-health`,
+`dep-bump`, `pr-review`, `automation-health`, or `repo-sync`. Plugin names are the
+ones declared in the marketplace, which can differ from the per-skill directory
+names in the [Skills](#skills) table. Run `/plugin` after adding the marketplace to
+browse the authoritative list. Installing one standalone plugin does **not** pull
+in the others, so repeat the `install` line per plugin you want.
 
 ### Updating
 
@@ -47,6 +57,9 @@ update any installed plugins (a Claude Code restart applies plugin updates):
 /plugin marketplace update rossoctl-agent-skills
 /plugin update <plugin-name>@rossoctl-agent-skills
 ```
+
+Updating `repoman` refreshes the bundled engine scripts too, so engine fixes reach
+every RepoMan user through a single plugin update.
 
 ### Manual
 
@@ -60,7 +73,8 @@ cp -r skills/link-health-scanner /path/to/project/.claude/skills/
 
 All skills in this repo require:
 
-- `bash` 4+
+- `bash` 3.2+ — every skill runs on the macOS system default; no bash-4 features
+  are used.
 - `gh` (GitHub CLI, authenticated)
 - `jq`
 

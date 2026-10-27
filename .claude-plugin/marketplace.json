@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Automation skills for GitHub org maintenance",
-    "version": "1.0.0"
+    "version": "0.1.0"
   },
   "plugins": [
     {
@@ -95,7 +95,15 @@
       "source": "./",
       "strict": false,
       "skills": [
-        "./skills/repoman"
+        "./skills/repoman",
+        "./skills/link-health-scanner",
+        "./skills/link-health-fixer",
+        "./skills/dep-bump-scanner",
+        "./skills/dep-bump-fixer",
+        "./skills/github-pr-review",
+        "./skills/repo-sync",
+        "./skills/automation-health-dashboard",
+        "./skills/github-weekly-report"
       ]
     }
   ]

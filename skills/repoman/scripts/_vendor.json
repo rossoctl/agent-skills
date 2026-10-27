@@ -1,0 +1,30 @@
+{
+  "source_repo": "rossoctl/automation",
+  "source_sha": "0311752eba5350c74b8c9650137d3e6da65bd547",
+  "vendored_at": "2026-10-23T03:46:40Z",
+  "files": [
+    "automation-health-dashboard.sh",
+    "core.sh",
+    "dep-bump-fixer.sh",
+    "dep-bump-scanner.sh",
+    "extract-broken-links.sh",
+    "fork.sh",
+    "github-api.sh",
+    "link-health-fixer.sh",
+    "link-health-scanner.sh",
+    "org.sh",
+    "parse-diff-map.sh",
+    "pr-review-fixer.sh",
+    "pr-review-impact.sh",
+    "pr-review-lib.sh",
+    "pr-review-scanner.sh",
+    "program-lib.sh",
+    "repo-sync.sh",
+    "repoman-check.sh",
+    "repoman-index.sh",
+    "repoman-requirements.sh",
+    "repoman-run.sh",
+    "repoman-setup.sh",
+    "weekly-report.sh"
+  ]
+}
