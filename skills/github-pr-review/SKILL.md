@@ -374,6 +374,64 @@ This check catches a class of bugs where a new code path was written against a p
 data layout that differs from the actual deployment (e.g. design doc says key X lives in
 CM-A, but existing deployments have it in CM-B).
 
+### 3.11 Claims Check
+
+Always check for PRs that change code behavior:
+
+| Check | What |
+|-------|------|
+| Claims listed | List every fix or behavior the PR's title, body, commit messages and new test names say it delivers |
+| Target case | Each claim holds in the **exact** case it targets, not only a nearby easy case |
+| Sibling variants | The same claim holds for variants of that case (other units, locales, transports, API shapes) |
+| Test proves claim | The new test fails without the fix **and** asserts what the user sees (e.g. rendered output), not only an intermediate value |
+
+A claim that does not hold in its target case is **must-fix** (see §4.1), even
+when `main` was equally broken. Merging it would ship a false "fixed" plus a test
+that passes over the bug. "Not a regression" does not downgrade it.
+
+Example: a PR adds a `+` marker to a fixed-width table cell for clamped totals.
+The unit test checks the returned string and passes, but the clamped value is
+wider than the column, so the table truncates the cell and the `+` never reaches
+the screen. Render the real cell and assert its display width.
+
+### 3.12 Behavioral Probes (head vs base)
+
+For PRs that change parsing, decoding, formatting, arithmetic or other
+input-handling code, run the code instead of only reading it. Build the PR head
+and its merge base, and run the same probe inputs against both:
+
+```bash
+BASE_SHA=$(gh pr view <number> --json baseRefOid --jq .baseRefOid)
+HEAD_SHA=$(gh pr view <number> --json headRefOid --jq .headRefOid)
+git fetch origin "$BASE_SHA" "$HEAD_SHA"
+git worktree add "$LOG_DIR/base" "$BASE_SHA"
+git worktree add "$LOG_DIR/head" "$HEAD_SHA"
+# Write a small probe test or script once, run it in both trees, diff the outputs.
+```
+
+Choose probes from what the diff touches:
+
+| Diff touches | Probe with |
+|--------------|-----------|
+| A decoder reading new fields from client/upstream input | The field with a wrong JSON type (object for string, string for number), missing, `null` |
+| Numeric formatting or math | Boundary values: `0`, negative, max/min of the type, clamped/saturated values |
+| Fixed-width output (TUI, tables, logs) | The widest real value; assert display width ≤ column width |
+| Error or fallback paths | The input that triggers the fallback, and confirm the outcome is visible |
+
+Treat a behavior difference between base and head as a finding. If base
+accepted an input and head now rejects it, or one bad element now fails a
+whole document, that is **must-fix** even when the spec allows the stricter
+behavior. Clients that don't follow the spec exist. Check the blast radius
+too: in protocols that resend history (chat-style APIs), one rejected message
+can break every later request in the conversation.
+
+Example: a PR starts decoding `tool_calls[].function.arguments` into a typed
+`string`. A client sending an object makes the whole request fail to decode,
+where base, which never read the field, parsed it fine.
+
+If a probe can't be run (no toolchain, heavy build), say so in the summary's
+**Verification** line instead of implying the behavior was checked.
+
 ## Phase 4: Draft Review
 
 Present proposed review to user for approval before posting.
@@ -393,6 +451,9 @@ Present proposed review to user for approval before posting.
 
 Severity levels:
 - **must-fix** - Blocks merge. Security issues, broken functionality, missing sign-off.
+  Also: a fix the PR claims that does not hold in its target case (§3.11), and
+  input that base handled but head rejects or mishandles (§3.12). "Not a
+  regression vs `main`" does not downgrade either one.
 - **suggestion** - Should fix but not blocking. Better patterns, missing tests.
 - **nit** - Trivial. Style, naming, minor improvements.
 
@@ -409,6 +470,7 @@ Do NOT include praise comments — they clutter the review without adding value.
 **Agent/IDE config (.claude/.vscode)**: none / FLAGGED (list paths)
 **Commits**: N commits, all signed-off: yes/no
 **CI status**: passing/failing/pending
+**Verification**: probes run against head and base (§3.12), or why they were skipped
 ```
 
 Map `<association>` to its §1.6 trust tier so the line is self-explanatory:
