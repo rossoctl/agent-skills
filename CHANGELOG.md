@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- RepoMan-specific skills and plugin entries: `repoman`, link-health scanner
+  and fixer, dep-bump scanner and fixer, automation-health dashboard, GitHub
+  weekly report, and repo-sync. These are maintained in
+  [rossoctl/repoman](https://github.com/rossoctl/repoman) instead, avoiding
+  duplication and staleness.
+- The old bundled RepoMan engine, provenance stamp, and engine-vendoring script
+  and test. Engine distribution and vendoring now belong to `rossoctl/repoman`.
+
+### Changed
+
+- Installation documentation directs RepoMan users to `rossoctl-repoman` and
+  describes migrating existing installs without deleting `~/.repoman/` state.
+- `github-pr-review` remains available here as a standalone plugin. HyperShift
+  and BYO Cortex skills are unaffected.
+
 ## [0.1.0] - 2026-10-23
 
 First tagged release of RepoMan, distributed through the `rossoctl-agent-skills`
