@@ -5,48 +5,10 @@
     "email": "rosso@rossoctl.dev"
   },
   "metadata": {
-    "description": "Automation skills for GitHub org maintenance",
+    "description": "Agent skills for GitHub PR review, local agent hosting, and HyperShift cluster lifecycle",
     "version": "0.1.0"
   },
   "plugins": [
-    {
-      "name": "link-health",
-      "description": "Scan and fix broken links across all repos in a GitHub org",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/link-health-scanner",
-        "./skills/link-health-fixer"
-      ]
-    },
-    {
-      "name": "dep-bump",
-      "description": "Monitor and analyze Dependabot PRs for SLA breaches across a GitHub org",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/dep-bump-scanner",
-        "./skills/dep-bump-fixer"
-      ]
-    },
-    {
-      "name": "automation-health",
-      "description": "Generate executive-facing automation health dashboard combining all program metrics",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/automation-health-dashboard"
-      ]
-    },
-    {
-      "name": "github-weekly-report",
-      "description": "Generate comprehensive weekly GitHub org activity reports with active-epic tracking",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/github-weekly-report"
-      ]
-    },
     {
       "name": "github-pr-review",
       "description": "Automated PR review — conventions, security, CI status, inline comments",
@@ -66,15 +28,6 @@
       ]
     },
     {
-      "name": "repo-sync",
-      "description": "Keep local clones of the enrolled repos current by cloning missing ones and fast-forward pulling the rest, read-only toward GitHub",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/repo-sync"
-      ]
-    },
-    {
       "name": "hypershift",
       "description": "Full HyperShift (hosted OpenShift on AWS) cluster lifecycle: setup, preflight, quotas, create/destroy, debug, and TTL-based cleanup",
       "source": "./",
@@ -87,23 +40,6 @@
         "./skills/hypershift-cluster",
         "./skills/hypershift-debug",
         "./skills/hypershift-cleanup"
-      ]
-    },
-    {
-      "name": "repoman",
-      "description": "The RepoMan entrypoint: first-time setup, enabling a program, enrolling repos or an org, or running a program across enrolled repos. A single intent-dispatching skill.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/repoman",
-        "./skills/link-health-scanner",
-        "./skills/link-health-fixer",
-        "./skills/dep-bump-scanner",
-        "./skills/dep-bump-fixer",
-        "./skills/github-pr-review",
-        "./skills/repo-sync",
-        "./skills/automation-health-dashboard",
-        "./skills/github-weekly-report"
       ]
     }
   ]
