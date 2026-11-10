@@ -385,29 +385,52 @@ Always check for PRs that change code behavior:
 | Sibling variants | The same claim holds for variants of that case (other units, locales, transports, API shapes) |
 | Test proves claim | The new test fails without the fix **and** asserts what the user sees (e.g. rendered output), not only an intermediate value |
 
-A claim that does not hold in its target case is **must-fix** (see §4.1), even
-when `main` was equally broken. Merging it would ship a false "fixed" plus a test
-that passes over the bug. "Not a regression" does not downgrade it.
-
-Example: a PR adds a `+` marker to a fixed-width table cell for clamped totals.
-The unit test checks the returned string and passes, but the clamped value is
-wider than the column, so the table truncates the cell and the `+` never reaches
-the screen. Render the real cell and assert its display width.
+A claim that does not hold in its target case is **must-fix** (see §4.1): the
+user-visible behavior the PR says is fixed is still wrong, and merging would
+ship a false "fixed" plus a test that passes over the bug. This holds even when
+`main` was equally broken — severity comes from what the user sees, not from a
+comparison with `main`.
 
 ### 3.12 Behavioral Probes (head vs base)
 
+**Concrete-case rule:** every finding — from this section, §3.11, or any other
+check — needs a concrete case: "this input or situation leads to this wrong
+result." No case, no finding. Reading the diff is not evidence; if a claim can
+be checked by running the code, run it.
+
 For PRs that change parsing, decoding, formatting, arithmetic or other
-input-handling code, run the code instead of only reading it. Build the PR head
-and its merge base, and run the same probe inputs against both:
+input-handling code, probe head against base **when the tooling is already
+present** in the environment (an interpreter, test runner, or build tool
+already on `PATH`). Probes are opportunistic, never mandatory:
+
+- Use only tooling that is already installed. **Never install, download, or
+  substitute tools to make a probe run.** Fetching a toolchain mid-review to
+  satisfy a probe requirement is reward hacking; a probe that only runs after
+  the reviewer acquires new tooling is not trustworthy evidence.
+- If the toolchain the repo needs is absent (e.g. no `go` on `PATH` for a Go
+  PR), name it in the summary's **Not checked** list (§4.2) and fall back to
+  §3.11's claims check plus the concrete-case rule applied to the code as
+  written.
+
+When tooling is present, build the PR head and its merge base and run the same
+probe inputs against both:
 
 ```bash
+# Precondition: $LOG_DIR is set (see Context-Safe Execution) and points outside
+# the repo or into a git-ignored path — never into tracked files.
 BASE_SHA=$(gh pr view <number> --json baseRefOid --jq .baseRefOid)
 HEAD_SHA=$(gh pr view <number> --json headRefOid --jq .headRefOid)
 git fetch origin "$BASE_SHA" "$HEAD_SHA"
-git worktree add "$LOG_DIR/base" "$BASE_SHA"
-git worktree add "$LOG_DIR/head" "$HEAD_SHA"
-# Write a small probe test or script once, run it in both trees, diff the outputs.
+git worktree add --detach "$LOG_DIR/base" "$BASE_SHA"
+git worktree add --detach "$LOG_DIR/head" "$HEAD_SHA"
+trap 'git worktree remove --force "$LOG_DIR/base" 2>/dev/null;
+      git worktree remove --force "$LOG_DIR/head" 2>/dev/null;
+      git worktree prune' EXIT
+# Write one small probe (test or script), run it in both trees, diff the outputs.
 ```
+
+The `trap` removes the worktrees and prunes their registrations even when a
+probe fails — never leave detached checkouts behind.
 
 Choose probes from what the diff touches:
 
@@ -418,19 +441,28 @@ Choose probes from what the diff touches:
 | Fixed-width output (TUI, tables, logs) | The widest real value; assert display width ≤ column width |
 | Error or fallback paths | The input that triggers the fallback, and confirm the outcome is visible |
 
-Treat a behavior difference between base and head as a finding. If base
-accepted an input and head now rejects it, or one bad element now fails a
-whole document, that is **must-fix** even when the spec allows the stricter
-behavior. Clients that don't follow the spec exist. Check the blast radius
-too: in protocols that resend history (chat-style APIs), one rejected message
-can break every later request in the conversation.
+Treat a behavior difference between base and head as a finding, stated as a
+concrete case. If base accepted an input and head now rejects it, or one bad
+element now fails a whole document, the user-visible behavior is wrong —
+**must-fix** — even when the spec allows the stricter behavior, because
+clients that don't follow the spec exist. Check the blast radius too: in
+protocols that resend history (chat-style APIs), one rejected message can
+break every later request in the conversation.
 
-Example: a PR starts decoding `tool_calls[].function.arguments` into a typed
-`string`. A client sending an object makes the whole request fail to decode,
-where base, which never read the field, parsed it fine.
+#### Worked examples (§3.11, §3.12)
 
-If a probe can't be run (no toolchain, heavy build), say so in the summary's
-**Verification** line instead of implying the behavior was checked.
+Both come from reviews where the checklist passed but the behavior was wrong:
+
+- **A claimed fix that does not hold (§3.11):** a PR adds a `+` marker to a
+  fixed-width table cell for clamped totals. The unit test checks the returned
+  string and passes, but the clamped value is wider than the column, so the
+  table truncates the cell and the `+` never reaches the screen. The probe:
+  render the real cell and assert its display width.
+- **Input base handled, head rejects (§3.12):** a PR starts decoding
+  `tool_calls[].function.arguments` into a typed `string`. A client sending an
+  object makes the whole request fail to decode, where base, which never read
+  the field, parsed it fine. The probe: send one off-spec body against head
+  and base and diff the outcomes.
 
 ## Phase 4: Draft Review
 
@@ -450,10 +482,11 @@ Present proposed review to user for approval before posting.
 ```
 
 Severity levels:
-- **must-fix** - Blocks merge. Security issues, broken functionality, missing sign-off.
-  Also: a fix the PR claims that does not hold in its target case (§3.11), and
-  input that base handled but head rejects or mishandles (§3.12). "Not a
-  regression vs `main`" does not downgrade either one.
+- **must-fix** - Blocks merge. The user-visible behavior is wrong: security
+  issues, broken functionality, missing sign-off, a claimed fix that does not
+  hold in its target case (§3.11), or input that base handled and head now
+  rejects or mishandles (§3.12). Severity comes from what the user sees;
+  "not a regression vs `main`" does not downgrade it.
 - **suggestion** - Should fix but not blocking. Better patterns, missing tests.
 - **nit** - Trivial. Style, naming, minor improvements.
 
@@ -470,8 +503,14 @@ Do NOT include praise comments — they clutter the review without adding value.
 **Agent/IDE config (.claude/.vscode)**: none / FLAGGED (list paths)
 **Commits**: N commits, all signed-off: yes/no
 **CI status**: passing/failing/pending
-**Verification**: probes run against head and base (§3.12), or why they were skipped
+**Not checked**:
+- <probe or area skipped> — <why, naming the missing toolchain if that is the reason>
 ```
+
+The **Not checked** list is auditable, not optional: name every probe or area
+you did not run and why (e.g. `- head-vs-base probes — no Go toolchain on
+PATH; §3.12 forbids installing one`). If nothing was skipped, write
+`**Not checked**: none`.
 
 Map `<association>` to its §1.6 trust tier so the line is self-explanatory:
 `MEMBER`/`OWNER`/`COLLABORATOR` → **maintainer**, `CONTRIBUTOR` → **returning
