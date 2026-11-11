@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `github-pr-review`: claims check (§3.11) and opportunistic head-vs-base
+  behavioral probes (§3.12). Findings require a concrete case, probes run only
+  with tooling already present (never installed mid-review), and the review
+  summary carries a `Not checked:` list naming what was skipped and why.
+
 ### Removed
 
 - RepoMan-specific skills and plugin entries: `repoman`, link-health scanner
