@@ -413,11 +413,14 @@ docs page) get a light review:
 | Checkable facts | Paths, commands, flags, versions, config values and repo/issue states named in the changed text match the repo or GitHub — one lookup each |
 | Obvious errors | Wrong numbers, contradictions within the same page, broken formatting |
 
-Skip §3.11's line-by-line claims audit and §3.12's probes for docs-only PRs. Do
-not build simulations or models to test the docs' explanations. If an
-explanation looks wrong but checking it would take more than a lookup, raise
-it at most once, as a **suggestion**, and leave it to the human reviewer.
-Prose style, wording, and how the docs explain a concept are at most **nits**.
+Skip §3.11's line-by-line claims audit and §3.12's probes for docs-only PRs.
+The skip covers the audit and the probes only — §3.12's concrete-case rule
+still applies, and for a docs finding the case is the specific wrong line or
+fact: quote the line, state the correct value. Do not build simulations or
+models to test the docs' explanations. If an explanation looks wrong but
+checking it would take more than a lookup, raise it at most once, as a
+**suggestion**, and leave it to the human reviewer. Prose style, wording, and
+how the docs explain a concept are at most **nits**.
 
 ### 3.10 Feature Gate / Dual-Mode Code
 
@@ -673,8 +676,9 @@ gaining new must-fixes.
    and now you call it wrong), say so explicitly, own the earlier mistake,
    and do not grade the author's compliance as a defect above **suggestion**.
 5. **Stop when clean.** If every earlier must-fix is fixed and the increment
-   adds none, the verdict follows §4.3 with no must-fixes. Do not search the
-   unchanged parts of the PR for more.
+   adds none, the verdict follows §4.3 with no must-fixes — subject to the
+   §4.3 gates, which still block APPROVE on an unresolved `.claude`/`.vscode`
+   change. Do not search the unchanged parts of the PR for more.
 6. **Stay shorter.** A re-review summary is the status list from rule 1 plus
    any new increment findings, under ~120 words.
 
