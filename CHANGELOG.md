@@ -12,6 +12,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   behavioral probes (§3.12). Findings require a concrete case, probes run only
   with tooling already present (never installed mid-review), and the review
   summary carries a `Not checked:` list naming what was skipped and why.
+- `github-pr-review`: re-review mode (§1.7, §4.5). One review per head SHA;
+  re-reviews check earlier findings first, look for new issues only in the
+  increment, cap findings on unchanged code at nit, and stop once clean. The
+  §3.5a supply-chain must-fix is raised once per file version. Reviews have
+  length caps and no greetings or personas.
+- `github-pr-review`: resolved review threads are closed and not raised
+  again. An `ai-review-final` label limits the round to a status check of
+  earlier findings. Docs-only PRs get a light review (links, checkable facts,
+  obvious errors) without the §3.11 audit or §3.12 probes.
 
 ### Removed
 
