@@ -196,7 +196,29 @@ gh api repos/{owner}/{repo}/pulls/<number>/comments --paginate \
   --jq ".[] | select(.user.login==\"$ME\") | {path, line, body}" > $LOG_DIR/pr-<number>-my-comments.json
 ```
 
+  Also fetch the review threads' resolution state. It is only available over
+  GraphQL:
+
+```bash
+gh api graphql -F owner={owner} -F repo={repo} -F pr=<number> -f query='
+  query($owner:String!,$repo:String!,$pr:Int!){
+    repository(owner:$owner,name:$repo){ pullRequest(number:$pr){
+      reviewThreads(first:100){ nodes{ isResolved isOutdated path line
+        comments(first:20){ nodes{ author{login} body } } } } } } }' \
+  > $LOG_DIR/pr-<number>-threads.json
+```
+
+  A **resolved** thread is closed: do not raise its point again, at any
+  severity, unless the increment changes those lines and breaks them anew. If
+  the author replied in a thread and disagreed, read the reply before
+  repeating the finding. Repeat it only with new evidence, and as a
+  **suggestion** at most, unless it is a security issue.
 - **No earlier review** → full review as below.
+
+**Round cap label.** If the PR carries the `ai-review-final` label, this is the
+last automated round. Only report the status of earlier findings (§4.5 rule
+1). Raise no new findings except security issues, and do not review again
+after this round, even on new pushes.
 
 ## Phase 2: Analyze Changes
 
@@ -382,6 +404,21 @@ If the PR touches `.yaml`/`.yml` files:
 | Updated | User-facing changes have docs/README updates |
 | Accurate | Docs match the actual behavior |
 
+**Docs-only PRs** (every changed file is Markdown, other prose, or a static
+docs page) get a light review:
+
+| Check | What |
+|-------|------|
+| Links | Changed links and anchors resolve |
+| Checkable facts | Paths, commands, flags, versions, config values and repo/issue states named in the changed text match the repo or GitHub — one lookup each |
+| Obvious errors | Wrong numbers, contradictions within the same page, broken formatting |
+
+Skip §3.11's line-by-line claims audit and §3.12's probes for docs-only PRs. Do
+not build simulations or models to test the docs' explanations. If an
+explanation looks wrong but checking it would take more than a lookup, raise
+it at most once, as a **suggestion**, and leave it to the human reviewer.
+Prose style, wording, and how the docs explain a concept are at most **nits**.
+
 ### 3.10 Feature Gate / Dual-Mode Code
 
 If the PR introduces two code paths behind a feature gate (e.g. `legacy` vs `resolved`,
@@ -409,7 +446,8 @@ CM-A, but existing deployments have it in CM-B).
 
 ### 3.11 Claims Check
 
-Always check for PRs that change code behavior:
+Always check for PRs that change code behavior. Skip it for docs-only PRs
+(§3.9):
 
 | Check | What |
 |-------|------|
